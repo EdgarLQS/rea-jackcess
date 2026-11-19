@@ -1,0 +1,83 @@
+#pragma once
+
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace rea_jackcess {
+
+enum class EngineVersion {
+    jet3,
+    jet4,
+    ace2007,
+    ace2010,
+    ace2016,
+    ace2019,
+    msisam,
+};
+
+enum class DatabaseErrorCode {
+    io_error,
+    truncated_file,
+    unsupported_version,
+    corrupted_file,
+    page_out_of_range,
+};
+
+class DatabaseError : public std::runtime_error {
+public:
+    DatabaseError(DatabaseErrorCode code,
+                  std::string message,
+                  std::filesystem::path path = {},
+                  std::optional<std::uint64_t> page_number = std::nullopt);
+
+    DatabaseErrorCode code() const noexcept;
+    const std::filesystem::path& path() const noexcept;
+    std::optional<std::uint64_t> page_number() const noexcept;
+
+private:
+    DatabaseErrorCode code_;
+    std::filesystem::path path_;
+    std::optional<std::uint64_t> page_number_;
+};
+
+struct FormatInfo {
+    EngineVersion version;
+    std::uint32_t page_size;
+    bool read_only;
+
+    const char* name() const noexcept;
+};
+
+class DatabaseFile {
+public:
+    // Opens the file read-only and identifies its engine version from the header.
+    static DatabaseFile open(const std::filesystem::path& path);
+
+    ~DatabaseFile();
+
+    DatabaseFile(DatabaseFile&& other) noexcept;
+    DatabaseFile& operator=(DatabaseFile&& other) noexcept;
+
+    DatabaseFile(const DatabaseFile&) = delete;
+    DatabaseFile& operator=(const DatabaseFile&) = delete;
+
+    const std::filesystem::path& path() const noexcept;
+    const FormatInfo& format() const noexcept;
+    std::uint64_t page_count() const noexcept;
+
+    // Returns stored page bytes. Page zero is not unmasked and encoded pages are not decoded.
+    std::vector<std::uint8_t> read_page(std::uint64_t page_number) const;
+
+private:
+    struct Impl;
+    explicit DatabaseFile(std::unique_ptr<Impl> impl);
+
+    std::unique_ptr<Impl> impl_;
+};
+
+}
