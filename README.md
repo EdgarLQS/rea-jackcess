@@ -4,9 +4,9 @@ rea-jackcess 是 Jackcess 的 C++ 重写项目。首期目标是在原生 Linux 
 
 ## 当前状态
 
-已实现 Jet/ACE 版本头识别、只读页访问，以及 Jet4 表定义、Usage Map、数据页行目录和系统目录对象字段（`Id`、`ParentId`、`Name`、`Type`、`Flags`）读取。文本解码覆盖 UTF-16LE 和 Jet4 压缩文本。诊断 CLI 的 `inspect` 子命令会输出系统目录 schema 与对象摘要。
+已实现 Jet/ACE 版本头识别、只读页访问，以及 Jet4 表定义、Usage Map、数据页行目录和系统目录对象字段（`Id`、`ParentId`、`Name`、`Type`、`Flags`）读取。文本解码覆盖 UTF-16LE 和 Jet4 压缩文本。`DatabaseError` 可携带文件、页、表、行和列上下文。诊断 CLI 的 `inspect` 子命令会输出系统目录 schema 与对象摘要。
 
-当前 P1 仍未完成：普通表发现及 schema 装载、公开表/行 API、其他字段类型与 Memo/OLE 长值、属性和索引读取，以及 Jet4 写入。完整 P0 行为矩阵和上游同步 CI 也待实施。只读本地样本 `test_data_only_read/test_mdb.mdb`（SHA-256 `0bc0acb9c732de1e17c43c2d0a6019f7b5a62ccf83c5818a1bc42db7dbc460c6`）的系统目录 51 行与 MDBTools 1.0.1 导出在上述 5 个字段上匹配；该样本不属于仓库测试资产。
+当前 P1 仍未完成：普通表发现及 schema 装载、canonical JSON v1 输出、公开表/行 API、其他字段类型与 Memo/OLE 长值、属性和索引读取，以及 Jet4 写入。`inspect` 当前 JSON 只是内部诊断摘要，不能作为 canonical 比较文件。完整 P0 行为矩阵和上游同步 CI 也待实施。只读本地样本 `test_data_only_read/test_mdb.mdb`（SHA-256 `0bc0acb9c732de1e17c43c2d0a6019f7b5a62ccf83c5818a1bc42db7dbc460c6`）的系统目录 51 行与 MDBTools 1.0.1 导出在上述 5 个字段上匹配；该样本不属于仓库测试资产。
 
 Jet4 读写是第一个内部里程碑，核心库在完整矩阵通过后发布。PGeo 导入和样本克隆使用独立的 GIS 验收关口，各自发布。
 

@@ -15,11 +15,13 @@ struct DatabaseFile::Impl {
 DatabaseError::DatabaseError(DatabaseErrorCode code,
                              std::string message,
                              std::filesystem::path path,
-                             std::optional<std::uint64_t> page_number)
+                             std::optional<std::uint64_t> page_number,
+                             DatabaseErrorContext context)
     : std::runtime_error(std::move(message)),
       code_(code),
       path_(std::move(path)),
-      page_number_(page_number) {}
+      page_number_(page_number),
+      context_(std::move(context)) {}
 
 DatabaseErrorCode DatabaseError::code() const noexcept {
     return code_;
@@ -31,6 +33,10 @@ const std::filesystem::path& DatabaseError::path() const noexcept {
 
 std::optional<std::uint64_t> DatabaseError::page_number() const noexcept {
     return page_number_;
+}
+
+const DatabaseErrorContext& DatabaseError::context() const noexcept {
+    return context_;
 }
 
 DatabaseFile::DatabaseFile(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}

@@ -10,6 +10,7 @@
 #include <limits>
 #include <set>
 #include <string_view>
+#include <utility>
 
 namespace rea_jackcess::detail {
 namespace {
@@ -23,8 +24,27 @@ constexpr std::uint8_t text_type = 0x0a;
 
 [[noreturn]] void corrupted_row(const PageFile& file,
                                 std::uint64_t page_number,
-                                const char* reason) {
-    throw DatabaseError(DatabaseErrorCode::corrupted_file, reason, file.path(), page_number);
+                                const char* reason,
+                                DatabaseErrorContext context = {}) {
+    if (!context.table_name) {
+        context.table_name = "MSysObjects";
+    }
+    throw DatabaseError(DatabaseErrorCode::corrupted_file,
+                        reason,
+                        file.path(),
+                        page_number,
+                        std::move(context));
+}
+
+DatabaseErrorContext row_context(const DataPageRow& row, const ColumnDefinition* column = nullptr) {
+    DatabaseErrorContext context;
+    context.table_name = "MSysObjects";
+    context.row_number = row.row_number;
+    if (column != nullptr) {
+        context.column_number = column->column_number;
+        context.column_name = column->name;
+    }
+    return context;
 }
 
 std::uint16_t read_u16(const std::vector<std::uint8_t>& bytes, std::uint64_t offset) {
@@ -63,7 +83,13 @@ const ColumnDefinition& find_column(const PageFile& file,
         return equals_ignore_case(candidate.name, name);
     });
     if (column == definition.columns.end() || column->type != type) {
-        corrupted_row(file, page_number, "System catalog is missing a required column or has an unsupported type");
+        DatabaseErrorContext context;
+        context.table_name = "MSysObjects";
+        context.column_name = std::string(name);
+        corrupted_row(file,
+                      page_number,
+                      "System catalog is missing a required column or has an unsupported type",
+                      std::move(context));
     }
     return *column;
 }
@@ -74,13 +100,13 @@ bool row_has_non_null_value(const PageFile& file,
                             const ColumnDefinition& column) {
     const auto& bytes = row.bytes;
     if (bytes.size() < row_column_count_size) {
-        corrupted_row(file, page_number, "System catalog row is shorter than its column count");
+        corrupted_row(file, page_number, "System catalog row is shorter than its column count", row_context(row, &column));
     }
 
     const std::uint16_t row_column_count = read_u16(bytes, 0);
     const std::uint64_t null_mask_size = (static_cast<std::uint64_t>(row_column_count) + 7) / 8;
     if (null_mask_size > bytes.size() - row_column_count_size) {
-        corrupted_row(file, page_number, "System catalog row has a truncated NULL mask");
+        corrupted_row(file, page_number, "System catalog row has a truncated NULL mask", row_context(row, &column));
     }
     const std::uint64_t null_mask_offset = bytes.size() - null_mask_size;
     if (column.column_number >= row_column_count) {
@@ -114,24 +140,24 @@ std::optional<std::vector<std::uint8_t>> read_column_bytes(const PageFile& file,
         start = fixed_data_row_offset + column.fixed_data_offset;
         end = start + column.length;
         if (end < start || end > null_mask_offset) {
-            corrupted_row(file, page_number, "System catalog fixed column extends beyond row data");
+            corrupted_row(file, page_number, "System catalog fixed column extends beyond row data", row_context(row, &column));
         }
     } else {
         const std::uint64_t variable_index = column.variable_table_index;
         if (variable_index >= variable_column_count) {
-            corrupted_row(file, page_number, "System catalog variable column index is outside the table schema");
+            corrupted_row(file, page_number, "System catalog variable column index is outside the table schema", row_context(row, &column));
         }
         if (null_mask_offset < 6 || variable_index > (null_mask_offset - 6) / 2) {
-            corrupted_row(file, page_number, "System catalog variable column offsets are truncated");
+            corrupted_row(file, page_number, "System catalog variable column offsets are truncated", row_context(row, &column));
         }
         const std::uint64_t offset_position = null_mask_offset - 4 - variable_index * 2;
         if (offset_position < 2) {
-            corrupted_row(file, page_number, "System catalog variable column offsets are truncated");
+            corrupted_row(file, page_number, "System catalog variable column offsets are truncated", row_context(row, &column));
         }
         start = read_u16(bytes, offset_position);
         end = read_u16(bytes, offset_position - 2);
         if (start > end || end > offset_position - 2 || start < row_column_count_size) {
-            corrupted_row(file, page_number, "System catalog variable column offsets are invalid");
+            corrupted_row(file, page_number, "System catalog variable column offsets are invalid", row_context(row, &column));
         }
     }
 
@@ -149,7 +175,7 @@ std::optional<std::int32_t> read_int32(const PageFile& file,
         return std::nullopt;
     }
     if (bytes->size() != 4) {
-        corrupted_row(file, page_number, "System catalog 32-bit integer has an invalid length");
+        corrupted_row(file, page_number, "System catalog 32-bit integer has an invalid length", row_context(row, &column));
     }
     const std::uint32_t value = read_u32(*bytes, 0);
     if (value <= static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())) {
@@ -168,7 +194,7 @@ std::optional<std::int16_t> read_int16(const PageFile& file,
         return std::nullopt;
     }
     if (bytes->size() != 2) {
-        corrupted_row(file, page_number, "System catalog 16-bit integer has an invalid length");
+        corrupted_row(file, page_number, "System catalog 16-bit integer has an invalid length", row_context(row, &column));
     }
     const std::uint16_t value = read_u16(*bytes, 0);
     if (value <= static_cast<std::uint16_t>(std::numeric_limits<std::int16_t>::max())) {
@@ -201,23 +227,23 @@ std::vector<std::uint8_t> read_complete_row(const PageFile& file,
     while (true) {
         const std::uint64_t row_key = page_number * 256 + row_number;
         if (!visited.insert(row_key).second) {
-            corrupted_row(file, page_number, "System catalog overflow row chain contains a cycle");
+            corrupted_row(file, page_number, "System catalog overflow row chain contains a cycle", row_context(*current_row));
         }
         if (!current_row->overflow) {
             return current_row->bytes;
         }
         if (current_row->bytes.size() < 4) {
-            corrupted_row(file, page_number, "System catalog overflow row pointer is truncated");
+            corrupted_row(file, page_number, "System catalog overflow row pointer is truncated", row_context(*current_row));
         }
 
         row_number = current_row->bytes[0];
         page_number = read_u24(current_row->bytes, 1);
         if (page_number == 0 || page_number >= file.page_count()) {
-            corrupted_row(file, page_number, "System catalog overflow row points outside the database");
+            corrupted_row(file, page_number, "System catalog overflow row points outside the database", row_context(*current_row));
         }
         current_page = read_data_page(file, page_number);
         if (row_number >= current_page.rows.size()) {
-            corrupted_row(file, page_number, "System catalog overflow row points outside its data page");
+            corrupted_row(file, page_number, "System catalog overflow row points outside its data page", row_context(*current_row));
         }
         current_row = &current_page.rows[row_number];
     }

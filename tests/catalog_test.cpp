@@ -206,12 +206,48 @@ void test_usage_map_and_system_catalog() {
     std::filesystem::remove(path, ignored);
 }
 
+void test_error_contains_row_and_column_context() {
+    const auto path = make_database_fixture();
+    {
+        std::fstream output(path, std::ios::binary | std::ios::in | std::ios::out);
+        constexpr std::streamoff first_column_header =
+            static_cast<std::streamoff>(2 * page_size + 63 + 21);
+        output.seekp(first_column_header, std::ios::beg);
+        const std::array<std::uint8_t, 2> invalid_offset{0xff, 0xff};
+        output.write(reinterpret_cast<const char*>(invalid_offset.data()),
+                     static_cast<std::streamsize>(invalid_offset.size()));
+        check(static_cast<bool>(output), "failed to corrupt the fixed column offset");
+    }
+
+    try {
+        const auto file = rea_jackcess::detail::PageFile::open(path);
+        const auto definition = rea_jackcess::detail::read_table_definition(file, 2);
+        rea_jackcess::detail::read_system_catalog_objects(file, definition);
+        throw std::runtime_error("invalid fixed column offset was accepted");
+    } catch (const rea_jackcess::DatabaseError& error) {
+        check(error.code() == rea_jackcess::DatabaseErrorCode::corrupted_file,
+              "invalid fixed column offset returned the wrong error code");
+        check(error.page_number() == 4, "corrupt row error did not preserve its page number");
+        check(error.context().table_name == "MSysObjects", "corrupt row error omitted its table name");
+        check(error.context().row_number == 0, "corrupt row error omitted its row number");
+        check(error.context().column_number == 0, "corrupt row error omitted its column number");
+        check(error.context().column_name == "Id", "corrupt row error omitted its column name");
+    } catch (...) {
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+        throw;
+    }
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+}
+
 }
 
 int main() {
     try {
         test_text_codec();
         test_usage_map_and_system_catalog();
+        test_error_contains_row_and_column_context();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

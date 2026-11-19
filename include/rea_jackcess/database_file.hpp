@@ -28,21 +28,31 @@ enum class DatabaseErrorCode {
     page_out_of_range,
 };
 
+struct DatabaseErrorContext {
+    std::optional<std::string> table_name;
+    std::optional<std::uint64_t> row_number;
+    std::optional<std::uint64_t> column_number;
+    std::optional<std::string> column_name;
+};
+
 class DatabaseError : public std::runtime_error {
 public:
     DatabaseError(DatabaseErrorCode code,
                   std::string message,
                   std::filesystem::path path = {},
-                  std::optional<std::uint64_t> page_number = std::nullopt);
+                  std::optional<std::uint64_t> page_number = std::nullopt,
+                  DatabaseErrorContext context = {});
 
     DatabaseErrorCode code() const noexcept;
     const std::filesystem::path& path() const noexcept;
     std::optional<std::uint64_t> page_number() const noexcept;
+    const DatabaseErrorContext& context() const noexcept;
 
 private:
     DatabaseErrorCode code_;
     std::filesystem::path path_;
     std::optional<std::uint64_t> page_number_;
+    DatabaseErrorContext context_;
 };
 
 struct FormatInfo {

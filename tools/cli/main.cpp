@@ -133,6 +133,19 @@ int main(int argc, char* argv[]) {
                 if (error.page_number()) {
                     std::cerr << ", page: " << *error.page_number();
                 }
+                const auto& context = error.context();
+                if (context.table_name) {
+                    std::cerr << ", table: " << *context.table_name;
+                }
+                if (context.row_number) {
+                    std::cerr << ", row: " << *context.row_number;
+                }
+                if (context.column_number) {
+                    std::cerr << ", column: " << *context.column_number;
+                }
+                if (context.column_name) {
+                    std::cerr << " (" << *context.column_name << ')';
+                }
                 std::cerr << ']';
             }
             std::cerr << '\n';
