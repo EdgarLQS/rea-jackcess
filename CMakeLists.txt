@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.16)
+project(rea_jackcess VERSION 0.0.0 LANGUAGES CXX)
+
+add_library(rea_jackcess STATIC src/version.cpp)
+add_library(rea_jackcess::core ALIAS rea_jackcess)
+target_compile_features(rea_jackcess PUBLIC cxx_std_17)
+set_target_properties(rea_jackcess PROPERTIES CXX_EXTENSIONS OFF)
+target_include_directories(rea_jackcess PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_compile_definitions(rea_jackcess PRIVATE REA_JACKCESS_VERSION="${PROJECT_VERSION}")
+
+add_executable(rea_jackcess_cli tools/cli/main.cpp)
+set_target_properties(rea_jackcess_cli PROPERTIES OUTPUT_NAME rea-jackcess CXX_EXTENSIONS OFF)
+target_link_libraries(rea_jackcess_cli PRIVATE rea_jackcess::core)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
