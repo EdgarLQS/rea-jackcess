@@ -1,7 +1,9 @@
 #include "jet_format.hpp"
 
 #include <array>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace rea_jackcess {
 
@@ -32,6 +34,9 @@ namespace {
 
 constexpr std::size_t engine_name_offset = 4;
 constexpr std::uint64_t version_offset = 20;
+constexpr std::size_t code_page_offset = 60;
+constexpr std::uint8_t code_page_mask_low = 0x7b;
+constexpr std::uint8_t code_page_mask_high = 0x42;
 constexpr std::array<char, 15> msisam_engine_name{
     'M', 'S', 'I', 'S', 'A', 'M', ' ', 'D', 'a', 't', 'a', 'b', 'a', 's', 'e'};
 
@@ -66,6 +71,16 @@ FormatInfo detect_format(const std::array<std::uint8_t, database_header_size>& h
             throw DatabaseError(DatabaseErrorCode::unsupported_version,
                                 "Unsupported database engine version " + std::to_string(version), path);
     }
+}
+
+std::optional<std::uint16_t> decode_jet4_code_page(const std::vector<std::uint8_t>& raw_root_page) {
+    if (raw_root_page.size() < code_page_offset + 2) {
+        return std::nullopt;
+    }
+    // These are BASE_HEADER_MASK bytes 36-37 at root-page offset 24, per Jackcess 5.2.0.
+    const std::uint8_t low = raw_root_page[code_page_offset] ^ code_page_mask_low;
+    const std::uint8_t high = raw_root_page[code_page_offset + 1] ^ code_page_mask_high;
+    return static_cast<std::uint16_t>(low) | static_cast<std::uint16_t>(static_cast<std::uint16_t>(high) << 8);
 }
 
 }

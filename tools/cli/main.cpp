@@ -3,6 +3,7 @@
 #include "catalog/system_catalog.hpp"
 #include "catalog/table_definition.hpp"
 #include "page/page_file.hpp"
+#include "canonical_json.hpp"
 
 #include <iostream>
 #include <optional>
@@ -71,12 +72,30 @@ void write_optional_string(const std::optional<std::string>& value) {
 int main(int argc, char* argv[]) {
     const std::string_view option = argc >= 2 ? argv[1] : "";
     if (argc == 1 || option == "--help") {
-        std::cout << "Usage: rea-jackcess [--help | --version | inspect <database-file>]\n";
+        std::cout << "Usage: rea-jackcess [--help | --version | inspect <database-file> | canonical <database-file>]\n";
         return 0;
     }
     if (option == "--version") {
         std::cout << "rea-jackcess " << rea_jackcess::version() << '\n';
         return 0;
+    }
+    if (argc == 3 && option == "canonical") {
+        try {
+            const auto database = rea_jackcess::detail::PageFile::open(argv[2]);
+            rea_jackcess::detail::write_canonical_json(std::cout, database, database.path());
+            return 0;
+        } catch (const rea_jackcess::DatabaseError& error) {
+            std::cerr << "Cannot write canonical database dump: " << error.what();
+            if (!error.path().empty()) {
+                std::cerr << " [file: " << error.path().string();
+                if (error.page_number()) {
+                    std::cerr << ", page: " << *error.page_number();
+                }
+                std::cerr << ']';
+            }
+            std::cerr << '\n';
+            return 1;
+        }
     }
     if (argc == 3 && option == "inspect") {
         try {

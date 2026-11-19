@@ -11,5 +11,9 @@ add_test(NAME database_file COMMAND rea_jackcess_tests)
 
 add_executable(rea_jackcess_catalog_tests catalog_test.cpp)
 target_link_libraries(rea_jackcess_catalog_tests PRIVATE rea_jackcess::core)
-target_include_directories(rea_jackcess_catalog_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+target_sources(rea_jackcess_catalog_tests PRIVATE "${PROJECT_SOURCE_DIR}/tools/cli/canonical_json.cpp")
+target_include_directories(rea_jackcess_catalog_tests PRIVATE
+    "${PROJECT_SOURCE_DIR}/src"
+    "${PROJECT_SOURCE_DIR}/tools/cli"
+)
 add_test(NAME catalog COMMAND rea_jackcess_catalog_tests)

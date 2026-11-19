@@ -1,23 +1,17 @@
 #include "system_catalog.hpp"
 
-#include "../page/data_page.hpp"
-#include "../page/page_types.hpp"
+#include "row_reader.hpp"
 #include "../value/text_codec.hpp"
 
 #include <algorithm>
 #include <cctype>
-#include <cstddef>
 #include <limits>
-#include <set>
 #include <string_view>
 #include <utility>
 
 namespace rea_jackcess::detail {
 namespace {
 
-constexpr std::uint64_t row_column_count_size = 2;
-constexpr std::uint64_t fixed_data_row_offset = 2;
-constexpr std::uint8_t fixed_length_flag = 0x01;
 constexpr std::uint8_t short_type = 0x03;
 constexpr std::uint8_t long_type = 0x04;
 constexpr std::uint8_t text_type = 0x0a;
@@ -36,17 +30,6 @@ constexpr std::uint8_t text_type = 0x0a;
                         std::move(context));
 }
 
-DatabaseErrorContext row_context(const DataPageRow& row, const ColumnDefinition* column = nullptr) {
-    DatabaseErrorContext context;
-    context.table_name = "MSysObjects";
-    context.row_number = row.row_number;
-    if (column != nullptr) {
-        context.column_number = column->column_number;
-        context.column_name = column->name;
-    }
-    return context;
-}
-
 std::uint16_t read_u16(const std::vector<std::uint8_t>& bytes, std::uint64_t offset) {
     return static_cast<std::uint16_t>(bytes[offset]) |
            static_cast<std::uint16_t>(static_cast<std::uint16_t>(bytes[offset + 1]) << 8);
@@ -57,12 +40,6 @@ std::uint32_t read_u32(const std::vector<std::uint8_t>& bytes, std::uint64_t off
            (static_cast<std::uint32_t>(bytes[offset + 1]) << 8) |
            (static_cast<std::uint32_t>(bytes[offset + 2]) << 16) |
            (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
-}
-
-std::uint32_t read_u24(const std::vector<std::uint8_t>& bytes, std::uint64_t offset) {
-    return static_cast<std::uint32_t>(bytes[offset]) |
-           (static_cast<std::uint32_t>(bytes[offset + 1]) << 8) |
-           (static_cast<std::uint32_t>(bytes[offset + 2]) << 16);
 }
 
 bool equals_ignore_case(std::string_view left, std::string_view right) {
@@ -94,90 +71,37 @@ const ColumnDefinition& find_column(const PageFile& file,
     return *column;
 }
 
-bool row_has_non_null_value(const PageFile& file,
-                            std::uint64_t page_number,
-                            const DataPageRow& row,
-                            const ColumnDefinition& column) {
-    const auto& bytes = row.bytes;
-    if (bytes.size() < row_column_count_size) {
-        corrupted_row(file, page_number, "System catalog row is shorter than its column count", row_context(row, &column));
+const EncodedColumnValue& encoded_value(const PageFile& file,
+                                        const EncodedTableRow& row,
+                                        const ColumnDefinition& column) {
+    if (column.column_number >= row.columns.size()) {
+        DatabaseErrorContext context;
+        context.table_name = "MSysObjects";
+        context.row_number = row.row_number;
+        context.column_number = column.column_number;
+        context.column_name = column.name;
+        corrupted_row(file, row.page_number, "System catalog row is missing a decoded column", std::move(context));
     }
-
-    const std::uint16_t row_column_count = read_u16(bytes, 0);
-    const std::uint64_t null_mask_size = (static_cast<std::uint64_t>(row_column_count) + 7) / 8;
-    if (null_mask_size > bytes.size() - row_column_count_size) {
-        corrupted_row(file, page_number, "System catalog row has a truncated NULL mask", row_context(row, &column));
-    }
-    const std::uint64_t null_mask_offset = bytes.size() - null_mask_size;
-    if (column.column_number >= row_column_count) {
-        return false;
-    }
-    const std::uint64_t mask_byte = null_mask_offset + column.column_number / 8;
-    const std::uint8_t mask_bit = static_cast<std::uint8_t>(1u << (column.column_number % 8));
-    if ((bytes[mask_byte] & mask_bit) == 0) {
-        return false;
-    }
-
-    return true;
-}
-
-std::optional<std::vector<std::uint8_t>> read_column_bytes(const PageFile& file,
-                                                          std::uint64_t page_number,
-                                                          const DataPageRow& row,
-                                                          const ColumnDefinition& column,
-                                                          std::uint16_t variable_column_count) {
-    if (!row_has_non_null_value(file, page_number, row, column)) {
-        return std::nullopt;
-    }
-    const auto& bytes = row.bytes;
-    const std::uint16_t row_column_count = read_u16(bytes, 0);
-    const std::uint64_t null_mask_size = (static_cast<std::uint64_t>(row_column_count) + 7) / 8;
-    const std::uint64_t null_mask_offset = bytes.size() - null_mask_size;
-
-    std::uint64_t start = 0;
-    std::uint64_t end = 0;
-    if ((column.flags & fixed_length_flag) != 0) {
-        start = fixed_data_row_offset + column.fixed_data_offset;
-        end = start + column.length;
-        if (end < start || end > null_mask_offset) {
-            corrupted_row(file, page_number, "System catalog fixed column extends beyond row data", row_context(row, &column));
-        }
-    } else {
-        const std::uint64_t variable_index = column.variable_table_index;
-        if (variable_index >= variable_column_count) {
-            corrupted_row(file, page_number, "System catalog variable column index is outside the table schema", row_context(row, &column));
-        }
-        if (null_mask_offset < 6 || variable_index > (null_mask_offset - 6) / 2) {
-            corrupted_row(file, page_number, "System catalog variable column offsets are truncated", row_context(row, &column));
-        }
-        const std::uint64_t offset_position = null_mask_offset - 4 - variable_index * 2;
-        if (offset_position < 2) {
-            corrupted_row(file, page_number, "System catalog variable column offsets are truncated", row_context(row, &column));
-        }
-        start = read_u16(bytes, offset_position);
-        end = read_u16(bytes, offset_position - 2);
-        if (start > end || end > offset_position - 2 || start < row_column_count_size) {
-            corrupted_row(file, page_number, "System catalog variable column offsets are invalid", row_context(row, &column));
-        }
-    }
-
-    return std::vector<std::uint8_t>(bytes.begin() + static_cast<std::ptrdiff_t>(start),
-                                     bytes.begin() + static_cast<std::ptrdiff_t>(end));
+    return row.columns[column.column_number];
 }
 
 std::optional<std::int32_t> read_int32(const PageFile& file,
-                                       std::uint64_t page_number,
-                                       const DataPageRow& row,
-                                       const ColumnDefinition& column,
-                                       std::uint16_t variable_column_count) {
-    auto bytes = read_column_bytes(file, page_number, row, column, variable_column_count);
-    if (!bytes) {
+                                       const EncodedTableRow& row,
+                                       const ColumnDefinition& column) {
+    const auto& encoded = encoded_value(file, row, column);
+    if (!encoded.bytes) {
         return std::nullopt;
     }
-    if (bytes->size() != 4) {
-        corrupted_row(file, page_number, "System catalog 32-bit integer has an invalid length", row_context(row, &column));
+    if (encoded.bytes->size() != 4) {
+        DatabaseErrorContext context;
+        context.table_name = "MSysObjects";
+        context.row_number = row.row_number;
+        context.column_number = column.column_number;
+        context.column_name = column.name;
+        corrupted_row(file, row.page_number,
+                      "System catalog 32-bit integer has an invalid length", std::move(context));
     }
-    const std::uint32_t value = read_u32(*bytes, 0);
+    const std::uint32_t value = read_u32(*encoded.bytes, 0);
     if (value <= static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())) {
         return static_cast<std::int32_t>(value);
     }
@@ -185,18 +109,22 @@ std::optional<std::int32_t> read_int32(const PageFile& file,
 }
 
 std::optional<std::int16_t> read_int16(const PageFile& file,
-                                       std::uint64_t page_number,
-                                       const DataPageRow& row,
-                                       const ColumnDefinition& column,
-                                       std::uint16_t variable_column_count) {
-    auto bytes = read_column_bytes(file, page_number, row, column, variable_column_count);
-    if (!bytes) {
+                                       const EncodedTableRow& row,
+                                       const ColumnDefinition& column) {
+    const auto& encoded = encoded_value(file, row, column);
+    if (!encoded.bytes) {
         return std::nullopt;
     }
-    if (bytes->size() != 2) {
-        corrupted_row(file, page_number, "System catalog 16-bit integer has an invalid length", row_context(row, &column));
+    if (encoded.bytes->size() != 2) {
+        DatabaseErrorContext context;
+        context.table_name = "MSysObjects";
+        context.row_number = row.row_number;
+        context.column_number = column.column_number;
+        context.column_name = column.name;
+        corrupted_row(file, row.page_number,
+                      "System catalog 16-bit integer has an invalid length", std::move(context));
     }
-    const std::uint16_t value = read_u16(*bytes, 0);
+    const std::uint16_t value = read_u16(*encoded.bytes, 0);
     if (value <= static_cast<std::uint16_t>(std::numeric_limits<std::int16_t>::max())) {
         return static_cast<std::int16_t>(value);
     }
@@ -204,48 +132,21 @@ std::optional<std::int16_t> read_int16(const PageFile& file,
 }
 
 std::optional<std::string> read_text(const PageFile& file,
-                                     std::uint64_t page_number,
-                                     const DataPageRow& row,
-                                     const ColumnDefinition& column,
-                                     std::uint16_t variable_column_count) {
-    auto bytes = read_column_bytes(file, page_number, row, column, variable_column_count);
-    if (!bytes) {
+                                     const EncodedTableRow& row,
+                                     const ColumnDefinition& column) {
+    const auto& encoded = encoded_value(file, row, column);
+    if (!encoded.bytes) {
         return std::nullopt;
     }
-    return decode_jet4_text(*bytes);
-}
-
-std::vector<std::uint8_t> read_complete_row(const PageFile& file,
-                                           std::uint64_t start_page,
-                                           const DataPageRow& start_row) {
-    std::uint64_t page_number = start_page;
-    std::uint16_t row_number = start_row.row_number;
-    const DataPageRow* current_row = &start_row;
-    DataPage current_page{start_page, {}};
-    std::set<std::uint64_t> visited;
-
-    while (true) {
-        const std::uint64_t row_key = page_number * 256 + row_number;
-        if (!visited.insert(row_key).second) {
-            corrupted_row(file, page_number, "System catalog overflow row chain contains a cycle", row_context(*current_row));
-        }
-        if (!current_row->overflow) {
-            return current_row->bytes;
-        }
-        if (current_row->bytes.size() < 4) {
-            corrupted_row(file, page_number, "System catalog overflow row pointer is truncated", row_context(*current_row));
-        }
-
-        row_number = current_row->bytes[0];
-        page_number = read_u24(current_row->bytes, 1);
-        if (page_number == 0 || page_number >= file.page_count()) {
-            corrupted_row(file, page_number, "System catalog overflow row points outside the database", row_context(*current_row));
-        }
-        current_page = read_data_page(file, page_number);
-        if (row_number >= current_page.rows.size()) {
-            corrupted_row(file, page_number, "System catalog overflow row points outside its data page", row_context(*current_row));
-        }
-        current_row = &current_page.rows[row_number];
+    try {
+        return decode_jet4_text(*encoded.bytes);
+    } catch (const DatabaseError& error) {
+        DatabaseErrorContext context;
+        context.table_name = "MSysObjects";
+        context.row_number = row.row_number;
+        context.column_number = column.column_number;
+        context.column_name = column.name;
+        throw DatabaseError(error.code(), error.what(), file.path(), row.page_number, std::move(context));
     }
 }
 
@@ -265,29 +166,18 @@ std::vector<SystemCatalogObject> read_system_catalog_objects(const PageFile& fil
     const auto& name_column = find_column(file, context_page, definition, "Name", text_type);
     const auto& type_column = find_column(file, context_page, definition, "Type", short_type);
     const auto& flags_column = find_column(file, context_page, definition, "Flags", long_type);
-    const auto data_pages = read_usage_map_pages(file, definition.owned_pages);
+    const auto rows = read_table_rows(file, "MSysObjects", definition);
 
     std::vector<SystemCatalogObject> objects;
-    for (const std::uint64_t page_number : data_pages) {
-        const auto page_bytes = file.read_page(page_number);
-        if (page_bytes.empty() || page_bytes[0] != static_cast<std::uint8_t>(PageType::data)) {
-            corrupted_row(file, page_number, "System catalog usage map references a non-data page");
-        }
-        const DataPage data_page = parse_data_page(file, page_number, page_bytes);
-        for (const auto& row : data_page.rows) {
-            if (row.deleted) {
-                continue;
-            }
-            const auto complete_bytes = read_complete_row(file, page_number, row);
-            const DataPageRow complete_row{row.row_number, 0, 0, false, false, complete_bytes};
-            objects.push_back({
-                read_int32(file, page_number, complete_row, id_column, definition.variable_column_count),
-                read_int32(file, page_number, complete_row, parent_id_column, definition.variable_column_count),
-                read_text(file, page_number, complete_row, name_column, definition.variable_column_count),
-                read_int16(file, page_number, complete_row, type_column, definition.variable_column_count),
-                read_int32(file, page_number, complete_row, flags_column, definition.variable_column_count),
-            });
-        }
+    objects.reserve(rows.size());
+    for (const auto& row : rows) {
+        objects.push_back({
+            read_int32(file, row, id_column),
+            read_int32(file, row, parent_id_column),
+            read_text(file, row, name_column),
+            read_int16(file, row, type_column),
+            read_int32(file, row, flags_column),
+        });
     }
     return objects;
 }
