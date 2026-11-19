@@ -8,3 +8,8 @@ add_executable(rea_jackcess_tests database_file_test.cpp)
 target_link_libraries(rea_jackcess_tests PRIVATE rea_jackcess::core)
 target_include_directories(rea_jackcess_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 add_test(NAME database_file COMMAND rea_jackcess_tests)
+
+add_executable(rea_jackcess_catalog_tests catalog_test.cpp)
+target_link_libraries(rea_jackcess_catalog_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_catalog_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME catalog COMMAND rea_jackcess_catalog_tests)

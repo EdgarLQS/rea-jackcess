@@ -1,5 +1,6 @@
 #pragma once
 
+#include "usage_map.hpp"
 #include "../page/page_file.hpp"
 
 #include <cstdint>
@@ -32,6 +33,8 @@ struct TableDefinition {
     std::uint32_t logical_index_count;
     std::uint32_t physical_index_count;
     std::uint64_t continuation_page_count;
+    UsageMapReference owned_pages;
+    UsageMapReference free_space_pages;
     std::vector<ColumnDefinition> columns;
 };
 

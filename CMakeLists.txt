@@ -3,9 +3,13 @@ project(rea_jackcess VERSION 0.0.0 LANGUAGES CXX)
 
 add_library(rea_jackcess STATIC
     src/database_file.cpp
+    src/catalog/system_catalog.cpp
     src/catalog/table_definition.cpp
+    src/catalog/usage_map.cpp
     src/format/jet_format.cpp
+    src/page/data_page.cpp
     src/page/page_file.cpp
+    src/value/text_codec.cpp
     src/version.cpp
 )
 add_library(rea_jackcess::core ALIAS rea_jackcess)

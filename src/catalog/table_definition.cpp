@@ -1,6 +1,7 @@
 #include "table_definition.hpp"
 
 #include "../page/page_types.hpp"
+#include "../value/text_codec.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -22,6 +23,8 @@ constexpr std::uint64_t variable_column_count_offset = 43;
 constexpr std::uint64_t column_count_offset = 45;
 constexpr std::uint64_t logical_index_count_offset = 47;
 constexpr std::uint64_t physical_index_count_offset = 51;
+constexpr std::uint64_t owned_pages_offset = 55;
+constexpr std::uint64_t free_space_pages_offset = 59;
 constexpr std::uint64_t index_definition_size = 12;
 constexpr std::uint64_t column_definition_size = 25;
 constexpr std::uint64_t trailer_size = 2;
@@ -66,6 +69,16 @@ std::uint32_t read_u32(const PageFile& file,
            (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
 }
 
+std::uint32_t read_u24(const PageFile& file,
+                       std::uint64_t page_number,
+                       const std::vector<std::uint8_t>& bytes,
+                       std::uint64_t offset) {
+    require_bytes(file, page_number, bytes, offset, 3);
+    return static_cast<std::uint32_t>(bytes[offset]) |
+           (static_cast<std::uint32_t>(bytes[offset + 1]) << 8) |
+           (static_cast<std::uint32_t>(bytes[offset + 2]) << 16);
+}
+
 std::vector<std::uint8_t> read_definition_span(const PageFile& file,
                                                std::uint64_t first_page_number,
                                                const std::vector<std::uint64_t>& continuation_pages,
@@ -102,53 +115,6 @@ std::vector<std::uint8_t> read_definition_span(const PageFile& file,
                     static_cast<std::size_t>(bytes_to_copy),
                     result.begin() + static_cast<std::ptrdiff_t>(copied));
         copied += bytes_to_copy;
-    }
-
-    return result;
-}
-
-void append_utf8(std::string& output, std::uint32_t code_point) {
-    if (code_point <= 0x7f) {
-        output.push_back(static_cast<char>(code_point));
-    } else if (code_point <= 0x7ff) {
-        output.push_back(static_cast<char>(0xc0 | (code_point >> 6)));
-        output.push_back(static_cast<char>(0x80 | (code_point & 0x3f)));
-    } else if (code_point <= 0xffff) {
-        output.push_back(static_cast<char>(0xe0 | (code_point >> 12)));
-        output.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3f)));
-        output.push_back(static_cast<char>(0x80 | (code_point & 0x3f)));
-    } else {
-        output.push_back(static_cast<char>(0xf0 | (code_point >> 18)));
-        output.push_back(static_cast<char>(0x80 | ((code_point >> 12) & 0x3f)));
-        output.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3f)));
-        output.push_back(static_cast<char>(0x80 | (code_point & 0x3f)));
-    }
-}
-
-std::string decode_utf16le(const std::vector<std::uint8_t>& bytes) {
-    std::string result;
-    result.reserve(bytes.size());
-
-    for (std::size_t offset = 0; offset < bytes.size(); offset += 2) {
-        std::uint32_t code_point = static_cast<std::uint16_t>(bytes[offset]) |
-                                   static_cast<std::uint16_t>(static_cast<std::uint16_t>(bytes[offset + 1]) << 8);
-        if (code_point >= 0xd800 && code_point <= 0xdbff) {
-            if (offset + 3 < bytes.size()) {
-                const std::uint32_t low = static_cast<std::uint16_t>(bytes[offset + 2]) |
-                                          static_cast<std::uint16_t>(static_cast<std::uint16_t>(bytes[offset + 3]) << 8);
-                if (low >= 0xdc00 && low <= 0xdfff) {
-                    code_point = 0x10000 + ((code_point - 0xd800) << 10) + (low - 0xdc00);
-                    offset += 2;
-                } else {
-                    code_point = 0xfffd;
-                }
-            } else {
-                code_point = 0xfffd;
-            }
-        } else if (code_point >= 0xdc00 && code_point <= 0xdfff) {
-            code_point = 0xfffd;
-        }
-        append_utf8(result, code_point);
     }
 
     return result;
@@ -214,6 +180,14 @@ TableDefinition read_table_definition(const PageFile& file, std::uint64_t page_n
         read_u32(file, page_number, first_page, logical_index_count_offset);
     const std::uint32_t physical_index_count =
         read_u32(file, page_number, first_page, physical_index_count_offset);
+    const UsageMapReference owned_pages{
+        first_page[owned_pages_offset],
+        read_u24(file, page_number, first_page, owned_pages_offset + 1),
+    };
+    const UsageMapReference free_space_pages{
+        first_page[free_space_pages_offset],
+        read_u24(file, page_number, first_page, free_space_pages_offset + 1),
+    };
 
     if (definition_size < header_size) {
         corrupted_page(file, page_number, "Table definition is shorter than its fixed header");
@@ -314,6 +288,8 @@ TableDefinition read_table_definition(const PageFile& file, std::uint64_t page_n
         logical_index_count,
         physical_index_count,
         continuation_pages.size(),
+        owned_pages,
+        free_space_pages,
         std::move(columns),
     };
 }

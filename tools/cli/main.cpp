@@ -1,9 +1,11 @@
 #include "rea_jackcess/database_file.hpp"
 #include "rea_jackcess/version.hpp"
+#include "catalog/system_catalog.hpp"
 #include "catalog/table_definition.hpp"
 #include "page/page_file.hpp"
 
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -47,6 +49,23 @@ void write_json_string(std::string_view value) {
     std::cout << '"';
 }
 
+template <typename T>
+void write_optional_number(const std::optional<T>& value) {
+    if (value) {
+        std::cout << *value;
+    } else {
+        std::cout << "null";
+    }
+}
+
+void write_optional_string(const std::optional<std::string>& value) {
+    if (value) {
+        write_json_string(*value);
+    } else {
+        std::cout << "null";
+    }
+}
+
 }
 
 int main(int argc, char* argv[]) {
@@ -68,6 +87,7 @@ int main(int argc, char* argv[]) {
             std::cout << ",\"pageSize\":" << format.page_size << ",\"pageCount\":" << database.page_count();
             if (format.version == rea_jackcess::EngineVersion::jet4) {
                 const auto catalog = rea_jackcess::detail::read_table_definition(database, 2);
+                const auto objects = rea_jackcess::detail::read_system_catalog_objects(database, catalog);
                 std::cout << ",\"systemCatalog\":{\"page\":2,\"rowCount\":" << catalog.row_count
                           << ",\"columnCount\":" << catalog.column_count
                           << ",\"indexCount\":" << catalog.logical_index_count
@@ -83,6 +103,24 @@ int main(int argc, char* argv[]) {
                     std::cout << ",\"type\":" << static_cast<unsigned int>(column.type)
                               << ",\"columnNumber\":" << column.column_number
                               << ",\"columnId\":" << column.column_id << '}';
+                }
+                std::cout << "],\"objects\":[";
+                for (std::size_t index = 0; index < objects.size(); ++index) {
+                    if (index != 0) {
+                        std::cout << ',';
+                    }
+                    const auto& object = objects[index];
+                    std::cout << "{\"id\":";
+                    write_optional_number(object.id);
+                    std::cout << ",\"parentId\":";
+                    write_optional_number(object.parent_id);
+                    std::cout << ",\"name\":";
+                    write_optional_string(object.name);
+                    std::cout << ",\"type\":";
+                    write_optional_number(object.type);
+                    std::cout << ",\"flags\":";
+                    write_optional_number(object.flags);
+                    std::cout << '}';
                 }
                 std::cout << "]}";
             }
