@@ -6,7 +6,7 @@
 
 ## 开工前
 
-1. 阅读[README](README.md)了解项目与当前实现，[源码架构](src/ARCHITECTURE.md)了解模块边界，再读[计划总览](plan/Jackcess-C++重写/README.md)、[实施工作包](plan/Jackcess-C++重写/01-实施工作包.md)和[验收门槛](plan/Jackcess-C++重写/02-验收与发布门槛.md)确认任务范围及验收证据。
+1. 阅读[README](README.md)了解项目与当前实现，[源码架构](src/ARCHITECTURE.md)了解模块边界，再读[计划总览](plan/Jackcess-C++重写/README.md)、[能力矩阵](plan/Jackcess-C++重写/03-Jackcess-5.2.0能力矩阵.md)、[实施工作包](plan/Jackcess-C++重写/01-实施工作包.md)和[验收门槛](plan/Jackcess-C++重写/02-验收与发布门槛.md)确认任务范围及验收证据。能力矩阵当前仍是 P0 初版，不能当作冻结的完整规格。
 2. 先检查仓库实际代码、测试和未提交改动。当前 P0 能力矩阵尚未冻结，P1 尚未验收。已实现 Jet/ACE 头识别、只读页访问、Jet4 表/列和普通本地表读取、Usage Map、行目录与溢出行、基础值和 Memo/OLE 原始负载解码、列 `Required` 属性及逻辑/物理索引定义读取。公开 API 支持只读 `Database`、`Table`、`RowCursor`、带物理 `RowId` 的 `Row` 和 `Value`；`Table::rows_by_index()` 已支持按 Jet4 B-tree 叶链顺序扫描。索引键语义解码、按键查找/范围游标、其他属性、建库和修改写入尚未实现。以代码和本仓库回归结果更新判断，不要把部分能力或外部样本对照写成阶段验收完成。
 3. Jackcess 行为以[计划总览](plan/Jackcess-C++重写/README.md)固定的 5.2.0 源码提交、JAR 哈希及对应测试为准。按计划中的 `MDB_REFERENCE_DIR` 查找逆向笔记、比较器和外部语料；这些历史材料提供参考，不能替代本仓库当前回归或产品验收。
 

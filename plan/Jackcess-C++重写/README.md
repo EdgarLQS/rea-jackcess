@@ -34,6 +34,7 @@ PGeo 导入和样本克隆各自发布。由产品图层新建 PGeo 另行规划
 
 - [实施工作包与上游同步](01-实施工作包.md)
 - [验收与发布门槛](02-验收与发布门槛.md)
+- [Jackcess 5.2.0 能力矩阵（P0 初版，未冻结）](03-Jackcess-5.2.0能力矩阵.md)
 
 `MDB_REFERENCE_DIR` 指向 `daydaydaywork/dailyWork/schemedesign/20261116_MDB 读写问题设计` 的本地目录。下列路径相对于该目录，P0 在验收清单记录所用资料和脚本的版本或哈希。
 
