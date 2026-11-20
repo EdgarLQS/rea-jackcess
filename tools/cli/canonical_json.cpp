@@ -322,7 +322,99 @@ void write_schema_table(std::ostream& output,
                << ",\"scale\":" << scale
                << ",\"fixed\":" << ((column.flags & 0x01) != 0 ? "true" : "false")
                << ",\"rowColNum\":" << index
-               << ",\"nullable\":null}";
+               << ",\"nullable\":";
+        if (column.nullable) {
+            output << (*column.nullable ? "true" : "false");
+        } else {
+            output << "null";
+        }
+        output << '}';
+    }
+    output << "],\"indexes\":[";
+    for (std::size_t index = 0; index < table.definition.indexes.size(); ++index) {
+        if (index != 0) {
+            output << ',';
+        }
+        const auto& logical = table.definition.indexes[index];
+        const auto& physical = table.definition.physical_indexes[logical.index_data_number];
+        const bool primary_key = logical.type == 0x01;
+        const bool foreign_key = logical.type == 0x02;
+        const bool physical_is_primary =
+            std::any_of(table.definition.indexes.begin(), table.definition.indexes.end(), [&](const auto& item) {
+                return item.index_data_number == logical.index_data_number && item.type == 0x01;
+            });
+        output << "{\"ordinal\":" << index + 1 << ",\"name\":";
+        write_json_string(output, logical.name);
+        output << ",\"indexNumber\":" << logical.index_number
+               << ",\"physicalIndexNumber\":" << logical.index_data_number
+               << ",\"indexType\":" << static_cast<unsigned int>(logical.type)
+               << ",\"primaryKey\":" << (primary_key ? "true" : "false")
+               << ",\"foreignKey\":" << (foreign_key ? "true" : "false")
+               << ",\"unique\":" << (physical_is_primary || (physical.flags & 0x01) != 0 ? "true" : "false")
+               << ",\"ignoreNulls\":" << ((physical.flags & 0x02) != 0 ? "true" : "false")
+               << ",\"required\":" << ((physical.flags & 0x08) != 0 ? "true" : "false")
+               << ",\"flags\":" << static_cast<unsigned int>(physical.flags)
+               << ",\"rootPage\":" << physical.root_page_number
+               << ",\"uniqueEntryCount\":" << physical.unique_entry_count
+               << ",\"columns\":[";
+        for (std::size_t column_index = 0; column_index < physical.columns.size(); ++column_index) {
+            if (column_index != 0) {
+                output << ',';
+            }
+            const auto& indexed_column = physical.columns[column_index];
+            const auto column = std::find_if(table.definition.columns.begin(),
+                                             table.definition.columns.end(),
+                                             [&](const auto& candidate) {
+                                                 return candidate.column_number == indexed_column.column_number;
+                                             });
+            output << "{\"ordinal\":" << column_index + 1
+                   << ",\"columnNumber\":" << indexed_column.column_number << ",\"name\":";
+            write_json_string(output, column->name);
+            output << ",\"ascending\":" << (indexed_column.ascending ? "true" : "false") << '}';
+        }
+        output << "]";
+        if (foreign_key && logical.referenced_index_number >= 0) {
+            output << ",\"reference\":{\"indexType\":"
+                   << static_cast<unsigned int>(logical.referenced_index_type)
+                   << ",\"indexNumber\":" << logical.referenced_index_number
+                   << ",\"tablePage\":" << logical.referenced_table_page_number
+                   << ",\"cascadeUpdates\":" << ((logical.cascade_updates_flags & 0x01) != 0 ? "true" : "false")
+                   << ",\"cascadeDeletes\":" << ((logical.cascade_deletes_flags & 0x01) != 0 ? "true" : "false")
+                   << ",\"cascadeSetNull\":" << ((logical.cascade_deletes_flags & 0x02) != 0 ? "true" : "false")
+                   << '}';
+        } else {
+            output << ",\"reference\":null";
+        }
+        output << '}';
+    }
+    output << "],\"physicalIndexes\":[";
+    for (std::size_t index = 0; index < table.definition.physical_indexes.size(); ++index) {
+        if (index != 0) {
+            output << ',';
+        }
+        const auto& physical = table.definition.physical_indexes[index];
+        output << "{\"ordinal\":" << index + 1
+               << ",\"rootPage\":" << physical.root_page_number
+               << ",\"uniqueEntryCount\":" << physical.unique_entry_count
+               << ",\"flags\":" << static_cast<unsigned int>(physical.flags)
+               << ",\"extendedFlags\":" << static_cast<unsigned int>(physical.extended_flags)
+               << ",\"ownedPages\":{\"row\":" << static_cast<unsigned int>(physical.owned_pages.row_number)
+               << ",\"page\":" << physical.owned_pages.page_number << "},\"columns\":[";
+        for (std::size_t column_index = 0; column_index < physical.columns.size(); ++column_index) {
+            if (column_index != 0) {
+                output << ',';
+            }
+            const auto& indexed_column = physical.columns[column_index];
+            const auto column = std::find_if(table.definition.columns.begin(),
+                                             table.definition.columns.end(),
+                                             [&](const auto& candidate) {
+                                                 return candidate.column_number == indexed_column.column_number;
+                                             });
+            output << "{\"columnNumber\":" << indexed_column.column_number << ",\"name\":";
+            write_json_string(output, column->name);
+            output << ",\"ascending\":" << (indexed_column.ascending ? "true" : "false") << '}';
+        }
+        output << "]}";
     }
     output << ']';
     if (rows == nullptr) {
@@ -446,9 +538,9 @@ void write_canonical_json(std::ostream& output,
                               error.what(), error.page_number(), error.context().row_number});
         }
         write_schema_table(output, table, rows ? &*rows : nullptr);
-        if (!table.definition.columns.empty()) {
+        if (!table.definition.columns.empty() && !table.definition.column_properties_available) {
             errors.push_back({"column-schema", table.name, std::nullopt,
-                              "Column property maps are not decoded; nullable values are null", std::nullopt});
+                              "Column property maps are unavailable; nullable values are null", std::nullopt});
         }
         for (const auto& column : table.definition.columns) {
             if (!canonical_type(column.type)) {

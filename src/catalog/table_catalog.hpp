@@ -11,6 +11,7 @@ namespace rea_jackcess::detail {
 
 struct ReadableTableSchema {
     std::string name;
+    std::uint64_t definition_page_number;
     std::string object_type;
     bool is_user_table;
     bool is_linked;

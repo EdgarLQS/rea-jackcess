@@ -66,6 +66,12 @@ void write_u16(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint16
     bytes[offset + 1] = static_cast<std::uint8_t>(value >> 8);
 }
 
+void write_u24(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_t value) {
+    bytes[offset] = static_cast<std::uint8_t>(value);
+    bytes[offset + 1] = static_cast<std::uint8_t>(value >> 8);
+    bytes[offset + 2] = static_cast<std::uint8_t>(value >> 16);
+}
+
 void write_u32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_t value) {
     bytes[offset] = static_cast<std::uint8_t>(value);
     bytes[offset + 1] = static_cast<std::uint8_t>(value >> 8);
@@ -129,6 +135,40 @@ void write_table_definition(const std::filesystem::path& path,
         }
     }
     check(names_offset + 2 <= definition.size(), "table fixture definition is too short for its column names");
+    constexpr std::size_t physical_index_definition_size = 52;
+    constexpr std::size_t logical_index_definition_size = 28;
+    for (std::uint32_t index = 0; index < 2; ++index) {
+        const std::size_t base = names_offset + index * physical_index_definition_size;
+        for (std::uint16_t column = 0; column < 10; ++column) {
+            write_u16(definition, base + 4 + column * 3, 0xffff);
+        }
+        write_u16(definition, base + 4, static_cast<std::uint16_t>(index));
+        definition[base + 6] = index == 0 ? 0x01 : 0x00;
+        write_u24(definition, base + 35, 2);
+        write_u32(definition, base + 38, 0);
+        definition[base + 46] = index == 0 ? 0x01 : 0x00;
+    }
+    const std::size_t logical_index_offset = names_offset + 2 * physical_index_definition_size;
+    for (std::uint32_t index = 0; index < 2; ++index) {
+        const std::size_t base = logical_index_offset + index * logical_index_definition_size;
+        write_u32(definition, base + 4, index);
+        write_u32(definition, base + 8, index);
+        write_u32(definition, base + 13, 0xffffffffu);
+        write_u32(definition, base + 17, 0xffffffffu);
+        definition[base + 23] = index == 0 ? 0x01 : 0x00;
+    }
+    std::size_t index_names_offset = logical_index_offset + 2 * logical_index_definition_size;
+    const std::array<std::u16string, 2> index_names{{u"Index0", u"Index1"}};
+    for (const std::u16string& name : index_names) {
+        write_u16(definition, index_names_offset, static_cast<std::uint16_t>(name.size() * 2));
+        index_names_offset += 2;
+        for (const char16_t character : name) {
+            write_u16(definition, index_names_offset, static_cast<std::uint16_t>(character));
+            index_names_offset += 2;
+        }
+    }
+    check(index_names_offset + 2 <= definition.size(),
+          "table fixture definition is too short for its index metadata");
 
     std::fstream output(path, std::ios::binary | std::ios::in | std::ios::out);
     const std::size_t continuation_capacity = 4096 - 8;
@@ -318,7 +358,7 @@ void test_table_definition_continuations(const TemporaryDirectory& directory) {
 
 void test_column_names_cross_continuation(const TemporaryDirectory& directory) {
     const auto path = directory.file("continued-column-names.mdb");
-    write_table_definition(path, 3, 7500, 4, 170);
+    write_table_definition(path, 3, 8000, 4, 170);
 
     const auto file = rea_jackcess::detail::PageFile::open(path);
     const auto definition = rea_jackcess::detail::read_table_definition(file, 2);

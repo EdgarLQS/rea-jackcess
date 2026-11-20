@@ -15,6 +15,12 @@ struct SystemCatalogObject {
     std::optional<std::string> name;
     std::optional<std::int16_t> type;
     std::optional<std::int32_t> flags;
+    std::uint64_t page_number = 0;
+    std::uint16_t row_number = 0;
+    bool property_column_present = false;
+    std::optional<std::vector<std::uint8_t>> property_bytes;
+    std::optional<std::string> property_error;
+    std::optional<std::uint64_t> property_error_page;
 };
 
 std::vector<SystemCatalogObject> read_system_catalog_objects(const PageFile& file,

@@ -35,6 +35,7 @@ public:
     TableRowReader& operator=(const TableRowReader&) = delete;
 
     std::optional<EncodedTableRow> next();
+    EncodedTableRow read_at(std::uint64_t page_number, std::uint16_t row_number) const;
 
 private:
     struct Impl;

@@ -16,6 +16,7 @@ struct DatabaseState {
     PageFile file;
     TableSchemaCatalog schema;
     std::vector<std::vector<ColumnInfo>> columns;
+    std::vector<std::vector<IndexInfo>> indexes;
     std::vector<DatabaseDiagnostic> diagnostics;
 };
 

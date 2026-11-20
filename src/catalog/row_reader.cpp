@@ -238,6 +238,44 @@ struct TableRowReader::Impl {
         }
     }
 
+    EncodedTableRow read_at(std::uint64_t page_number, std::uint16_t row_number) const {
+        DataPage page;
+        try {
+            page = read_data_page(file, page_number);
+        } catch (const DatabaseError& error) {
+            rethrow_with_table_context(file, table_name, error, row_number);
+        }
+        if (row_number >= page.rows.size()) {
+            corrupted_row(file,
+                          table_name,
+                          page_number,
+                          "Index row reference is outside its data page",
+                          row_number);
+        }
+
+        const DataPageRow& row = page.rows[row_number];
+        if (row.deleted) {
+            corrupted_row(file,
+                          table_name,
+                          page_number,
+                          "Index references a deleted table row",
+                          row_number);
+        }
+
+        std::vector<std::uint8_t> complete_bytes;
+        try {
+            complete_bytes = read_complete_row(file, table_name, page_number, row);
+        } catch (const DatabaseError& error) {
+            rethrow_with_table_context(file, table_name, error, row_number);
+        }
+        return decode_row_layout(file,
+                                 table_name,
+                                 page_number,
+                                 row_number,
+                                 complete_bytes,
+                                 definition);
+    }
+
     const PageFile& file;
     std::string table_name;
     const TableDefinition& definition;
@@ -263,6 +301,13 @@ std::optional<EncodedTableRow> TableRowReader::next() {
         return std::nullopt;
     }
     return impl_->next();
+}
+
+EncodedTableRow TableRowReader::read_at(std::uint64_t page_number, std::uint16_t row_number) const {
+    if (!impl_) {
+        throw std::logic_error("Table row reader has no state; it may have been moved from");
+    }
+    return impl_->read_at(page_number, row_number);
 }
 
 std::vector<EncodedTableRow> read_table_rows(const PageFile& file,

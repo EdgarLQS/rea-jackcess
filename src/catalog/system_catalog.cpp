@@ -1,6 +1,7 @@
 #include "system_catalog.hpp"
 
 #include "row_reader.hpp"
+#include "../value/jet4_value.hpp"
 #include "../value/text_codec.hpp"
 
 #include <algorithm>
@@ -14,7 +15,11 @@ namespace {
 
 constexpr std::uint8_t short_type = 0x03;
 constexpr std::uint8_t long_type = 0x04;
+constexpr std::uint8_t binary_type = 0x09;
 constexpr std::uint8_t text_type = 0x0a;
+constexpr std::uint8_t ole_type = 0x0b;
+constexpr std::uint8_t memo_type = 0x0c;
+constexpr std::uint8_t big_binary_type = 0x11;
 
 [[noreturn]] void corrupted_row(const PageFile& file,
                                 std::uint64_t page_number,
@@ -69,6 +74,13 @@ const ColumnDefinition& find_column(const PageFile& file,
                       std::move(context));
     }
     return *column;
+}
+
+const ColumnDefinition* find_optional_column(const TableDefinition& definition, std::string_view name) {
+    const auto column = std::find_if(definition.columns.begin(), definition.columns.end(), [&](const auto& candidate) {
+        return equals_ignore_case(candidate.name, name);
+    });
+    return column == definition.columns.end() ? nullptr : &*column;
 }
 
 const EncodedColumnValue& encoded_value(const PageFile& file,
@@ -150,6 +162,44 @@ std::optional<std::string> read_text(const PageFile& file,
     }
 }
 
+std::optional<std::vector<std::uint8_t>> read_property_bytes(const PageFile& file,
+                                                             const EncodedTableRow& row,
+                                                             const ColumnDefinition& column) {
+    if (column.type != binary_type && column.type != ole_type &&
+        column.type != memo_type && column.type != big_binary_type) {
+        DatabaseErrorContext context;
+        context.table_name = "MSysObjects";
+        context.row_number = row.row_number;
+        context.column_number = column.column_number;
+        context.column_name = column.name;
+        corrupted_row(file,
+                      row.page_number,
+                      "System catalog property column has an unsupported type",
+                      std::move(context));
+    }
+
+    const auto value = decode_jet4_value(file, "MSysObjects", row, column);
+    if (const auto* blob = std::get_if<BlobValue>(&value)) {
+        return blob->bytes;
+    }
+    if (const auto* memo = std::get_if<MemoValue>(&value)) {
+        return memo->raw_bytes;
+    }
+    if (std::holds_alternative<std::monostate>(value)) {
+        return std::nullopt;
+    }
+
+    DatabaseErrorContext context;
+    context.table_name = "MSysObjects";
+    context.row_number = row.row_number;
+    context.column_number = column.column_number;
+    context.column_name = column.name;
+    corrupted_row(file,
+                  row.page_number,
+                  "System catalog property column could not be decoded as bytes",
+                  std::move(context));
+}
+
 }
 
 std::vector<SystemCatalogObject> read_system_catalog_objects(const PageFile& file,
@@ -166,18 +216,31 @@ std::vector<SystemCatalogObject> read_system_catalog_objects(const PageFile& fil
     const auto& name_column = find_column(file, context_page, definition, "Name", text_type);
     const auto& type_column = find_column(file, context_page, definition, "Type", short_type);
     const auto& flags_column = find_column(file, context_page, definition, "Flags", long_type);
+    const auto* properties_column = find_optional_column(definition, "LvProp");
     const auto rows = read_table_rows(file, "MSysObjects", definition);
 
     std::vector<SystemCatalogObject> objects;
     objects.reserve(rows.size());
     for (const auto& row : rows) {
-        objects.push_back({
+        SystemCatalogObject object{
             read_int32(file, row, id_column),
             read_int32(file, row, parent_id_column),
             read_text(file, row, name_column),
             read_int16(file, row, type_column),
             read_int32(file, row, flags_column),
-        });
+        };
+        object.page_number = row.page_number;
+        object.row_number = row.row_number;
+        object.property_column_present = properties_column != nullptr;
+        if (properties_column != nullptr) {
+            try {
+                object.property_bytes = read_property_bytes(file, row, *properties_column);
+            } catch (const DatabaseError& error) {
+                object.property_error = error.what();
+                object.property_error_page = error.page_number();
+            }
+        }
+        objects.push_back(std::move(object));
     }
     return objects;
 }

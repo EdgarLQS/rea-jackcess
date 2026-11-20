@@ -1,4 +1,5 @@
 #include "catalog/system_catalog.hpp"
+#include "catalog/property_map.hpp"
 #include "catalog/table_catalog.hpp"
 #include "catalog/table_definition.hpp"
 #include "catalog/usage_map.hpp"
@@ -51,9 +52,28 @@ void write_u32(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32
     bytes[offset + 3] = static_cast<std::uint8_t>(value >> 24);
 }
 
+void write_u24_be(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_t value) {
+    bytes[offset] = static_cast<std::uint8_t>(value >> 16);
+    bytes[offset + 1] = static_cast<std::uint8_t>(value >> 8);
+    bytes[offset + 2] = static_cast<std::uint8_t>(value);
+}
+
+void write_u32_be(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint32_t value) {
+    bytes[offset] = static_cast<std::uint8_t>(value >> 24);
+    bytes[offset + 1] = static_cast<std::uint8_t>(value >> 16);
+    bytes[offset + 2] = static_cast<std::uint8_t>(value >> 8);
+    bytes[offset + 3] = static_cast<std::uint8_t>(value);
+}
+
 void append_u16(std::vector<std::uint8_t>& bytes, std::uint16_t value) {
     bytes.push_back(static_cast<std::uint8_t>(value));
     bytes.push_back(static_cast<std::uint8_t>(value >> 8));
+}
+
+void append_u32(std::vector<std::uint8_t>& bytes, std::uint32_t value) {
+    const std::size_t offset = bytes.size();
+    bytes.resize(offset + 4);
+    write_u32(bytes, offset, value);
 }
 
 std::vector<std::uint8_t> utf16le(const std::u16string& text) {
@@ -131,7 +151,13 @@ std::filesystem::path make_database_fixture() {
         {u"Type", 0x03, 0x01, 0, 8, 2},
         {u"Flags", 0x04, 0x01, 0, 10, 4},
     }};
-    std::size_t definition_size = 63 + columns.size() * 25 + 2;
+    constexpr std::size_t row_count_definitions_size = 12;
+    constexpr std::size_t physical_index_definition_size = 52;
+    constexpr std::size_t logical_index_definition_size = 28;
+    const auto index_name = utf16le(u"Id");
+    std::size_t definition_size = 63 + row_count_definitions_size + columns.size() * 25 +
+                                  physical_index_definition_size + logical_index_definition_size +
+                                  2 + index_name.size() + 2;
     for (const auto& column : columns) {
         definition_size += 2 + column.name.size() * 2;
     }
@@ -143,14 +169,17 @@ std::filesystem::path make_database_fixture() {
     write_u16(definition, 41, static_cast<std::uint16_t>(columns.size()));
     write_u16(definition, 43, 1);
     write_u16(definition, 45, static_cast<std::uint16_t>(columns.size()));
+    write_u32(definition, 47, 1);
+    write_u32(definition, 51, 1);
     definition[55] = 0;
     write_u24(definition, 56, 3);
     definition[59] = 0;
     write_u24(definition, 60, 3);
 
-    std::size_t names_offset = 63 + columns.size() * 25;
+    write_u32(definition, 67, 2);
+    std::size_t names_offset = 63 + row_count_definitions_size + columns.size() * 25;
     for (std::size_t index = 0; index < columns.size(); ++index) {
-        const std::size_t header_offset = 63 + index * 25;
+        const std::size_t header_offset = 63 + row_count_definitions_size + index * 25;
         const auto encoded_name = utf16le(columns[index].name);
         definition[header_offset] = columns[index].type;
         write_u16(definition, header_offset + 5, static_cast<std::uint16_t>(index));
@@ -164,6 +193,25 @@ std::filesystem::path make_database_fixture() {
         std::copy(encoded_name.begin(), encoded_name.end(), definition.begin() + static_cast<std::ptrdiff_t>(names_offset));
         names_offset += encoded_name.size();
     }
+    const std::size_t physical_index_offset = names_offset;
+    write_u16(definition, physical_index_offset + 4, 0);
+    definition[physical_index_offset + 6] = 0x01;
+    for (std::size_t index = 1; index < 10; ++index) {
+        write_u16(definition, physical_index_offset + 4 + index * 3, 0xffff);
+    }
+    write_u24(definition, physical_index_offset + 35, 3);
+    definition[physical_index_offset + 46] = 0x01;
+
+    const std::size_t logical_index_offset = physical_index_offset + physical_index_definition_size;
+    write_u32(definition, logical_index_offset + 4, 0);
+    write_u32(definition, logical_index_offset + 8, 0);
+    write_u32(definition, logical_index_offset + 13, 0xffffffffu);
+    write_u32(definition, logical_index_offset + 17, 0xffffffffu);
+    definition[logical_index_offset + 23] = 0x01;
+    const std::size_t index_name_offset = logical_index_offset + logical_index_definition_size;
+    write_u16(definition, index_name_offset, static_cast<std::uint16_t>(index_name.size()));
+    std::copy(index_name.begin(), index_name.end(),
+              definition.begin() + static_cast<std::ptrdiff_t>(index_name_offset + 2));
     std::vector<std::uint8_t> user_definition(page_size, 0);
     user_definition[0] = 0x02;
     write_u32(user_definition, 8, 65);
@@ -182,6 +230,98 @@ std::filesystem::path make_database_fixture() {
     std::ofstream output(path, std::ios::binary);
     output.write(reinterpret_cast<const char*>(file_bytes.data()), static_cast<std::streamsize>(file_bytes.size()));
     check(static_cast<bool>(output), "failed to write the catalog fixture");
+    return path;
+}
+
+std::filesystem::path make_indexed_database_fixture() {
+    const auto path = make_database_fixture();
+    std::vector<std::uint8_t> file_bytes(page_size * 9, 0);
+    {
+        std::ifstream input(path, std::ios::binary);
+        input.read(reinterpret_cast<char*>(file_bytes.data()),
+                   static_cast<std::streamsize>(page_size * 6));
+        check(input.gcount() == static_cast<std::streamsize>(page_size * 6),
+              "failed to read the base index fixture");
+    }
+
+    constexpr std::size_t table_definition_page = 2;
+    constexpr std::size_t physical_index_definition_offset = 256;
+    constexpr std::size_t index_entry_data_offset = 480;
+    write_u32(file_bytes, table_definition_page * page_size + 16, 3);
+    file_bytes[table_definition_page * page_size + physical_index_definition_offset + 34] = 1;
+    write_u24(file_bytes,
+              table_definition_page * page_size + physical_index_definition_offset + 35,
+              3);
+    write_u32(file_bytes,
+              table_definition_page * page_size + physical_index_definition_offset + 38,
+              6);
+
+    write_data_page(file_bytes,
+                    3,
+                    {{0x00, 0, 0, 0, 0, 0x30},
+                     {0x00, 0, 0, 0, 0, 0xc0, 0x01}},
+                    {0, 0});
+    const std::vector<std::uint8_t> overflow_pointer{0, 5, 0, 0};
+    const auto second_row = make_catalog_row(2, 0, 1, 0, {0xff, 0xfe, 'A', 0, 0x2d, 0x4e, 0, 'B'});
+    const auto ignored_query = make_catalog_row(3, 0, 5, 0, utf16le(u"IgnoredQuery"));
+    write_data_page(file_bytes,
+                    4,
+                    {overflow_pointer, second_row, ignored_query},
+                    {0x4000, 0, 0});
+
+    std::vector<std::uint8_t> root_page(page_size, 0);
+    root_page[0] = 0x03;
+    write_u16(root_page, 2, static_cast<std::uint16_t>(page_size - index_entry_data_offset - 9));
+    write_u32(root_page, 4, static_cast<std::uint32_t>(table_definition_page));
+    write_u32(root_page, 20, 8);
+    write_u16(root_page, 24, 0);
+    root_page[26] = 1;
+    root_page[27 + 1] |= 1u << 1;
+    root_page[index_entry_data_offset] = 0x18;
+    write_u24_be(root_page, index_entry_data_offset + 1, 4);
+    root_page[index_entry_data_offset + 4] = 0;
+    write_u32_be(root_page, index_entry_data_offset + 5, 7);
+    std::copy(root_page.begin(), root_page.end(),
+              file_bytes.begin() + static_cast<std::ptrdiff_t>(6 * page_size));
+
+    std::vector<std::uint8_t> first_leaf(page_size, 0);
+    first_leaf[0] = 0x04;
+    write_u16(first_leaf, 2, static_cast<std::uint16_t>(page_size - index_entry_data_offset - 11));
+    write_u32(first_leaf, 4, static_cast<std::uint32_t>(table_definition_page));
+    write_u32(first_leaf, 16, 8);
+    write_u16(first_leaf, 24, 1);
+    first_leaf[26] = 0;
+    first_leaf[27] |= 1u << 6;
+    first_leaf[27 + 1] |= 1u << 3;
+    const std::array<std::uint8_t, 11> first_leaf_entries{
+        0x10, 0x01, 0x00, 0x00, 0x04, 0x00,
+        0x02, 0x00, 0x00, 0x04, 0x01,
+    };
+    std::copy(first_leaf_entries.begin(), first_leaf_entries.end(),
+              first_leaf.begin() + static_cast<std::ptrdiff_t>(index_entry_data_offset));
+    std::copy(first_leaf.begin(), first_leaf.end(),
+              file_bytes.begin() + static_cast<std::ptrdiff_t>(7 * page_size));
+
+    std::vector<std::uint8_t> last_leaf(page_size, 0);
+    last_leaf[0] = 0x04;
+    write_u16(last_leaf, 2, static_cast<std::uint16_t>(page_size - index_entry_data_offset - 6));
+    write_u32(last_leaf, 4, static_cast<std::uint32_t>(table_definition_page));
+    write_u32(last_leaf, 12, 7);
+    write_u16(last_leaf, 24, 0);
+    last_leaf[26] = 0;
+    last_leaf[27] |= 1u << 6;
+    const std::array<std::uint8_t, 6> last_leaf_entry{
+        0x20, 0x01, 0x00, 0x00, 0x04, 0x02,
+    };
+    std::copy(last_leaf_entry.begin(), last_leaf_entry.end(),
+              last_leaf.begin() + static_cast<std::ptrdiff_t>(index_entry_data_offset));
+    std::copy(last_leaf.begin(), last_leaf.end(),
+              file_bytes.begin() + static_cast<std::ptrdiff_t>(8 * page_size));
+
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output.write(reinterpret_cast<const char*>(file_bytes.data()),
+                 static_cast<std::streamsize>(file_bytes.size()));
+    check(static_cast<bool>(output), "failed to write the index fixture");
     return path;
 }
 
@@ -380,6 +520,60 @@ void test_table_schema_catalog() {
     std::filesystem::remove(path, ignored);
 }
 
+void test_column_property_map_nullability() {
+    const auto path = make_database_fixture();
+    try {
+        const auto file = rea_jackcess::detail::PageFile::open(path);
+        std::vector<std::uint8_t> property_bytes{'M', 'R', '2', 0};
+
+        const auto names_block = property_bytes.size();
+        append_u32(property_bytes, 0);
+        append_u16(property_bytes, 0x80);
+        const auto required_name = utf16le(u"Required");
+        append_u16(property_bytes, static_cast<std::uint16_t>(required_name.size()));
+        property_bytes.insert(property_bytes.end(), required_name.begin(), required_name.end());
+        write_u32(property_bytes, names_block, static_cast<std::uint32_t>(property_bytes.size() - names_block));
+
+        const auto values_block = property_bytes.size();
+        append_u32(property_bytes, 0);
+        append_u16(property_bytes, 0x01);
+        const auto column_map = property_bytes.size();
+        append_u32(property_bytes, 0);
+        const auto column_name = utf16le(u"FieldA");
+        append_u16(property_bytes, static_cast<std::uint16_t>(column_name.size()));
+        property_bytes.insert(property_bytes.end(), column_name.begin(), column_name.end());
+        write_u32(property_bytes, column_map, static_cast<std::uint32_t>(property_bytes.size() - column_map));
+        append_u16(property_bytes, 9);
+        property_bytes.push_back(0);
+        property_bytes.push_back(0x01);
+        append_u16(property_bytes, 0);
+        append_u16(property_bytes, 1);
+        property_bytes.push_back(1);
+        write_u32(property_bytes, values_block, static_cast<std::uint32_t>(property_bytes.size() - values_block));
+
+        const auto nullable = rea_jackcess::detail::read_column_nullability(
+            file, "TestTable", 7, 3, {"FieldA", "FieldB"}, property_bytes);
+        check(nullable == std::vector<bool>({false, true}),
+              "Required column property was not converted into nullability");
+
+        try {
+            rea_jackcess::detail::read_column_nullability(
+                file, "TestTable", 7, 3, {"FieldA"}, {'X', 'X', 'X', 0});
+            throw std::runtime_error("unrecognized property map header was accepted");
+        } catch (const rea_jackcess::DatabaseError& error) {
+            check(error.context().table_name == "TestTable" && error.context().row_number == 3 &&
+                      error.context().column_name == "LvProp",
+                  "property map error omitted system catalog context");
+        }
+    } catch (...) {
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+        throw;
+    }
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+}
+
 void test_table_context_is_preserved_for_usage_map_errors() {
     const auto path = make_database_fixture();
     try {
@@ -418,12 +612,20 @@ void test_public_database_table_and_row_cursor() {
                   tables[1].columns()[0].type == rea_jackcess::DataType::int32 &&
                   tables[1].columns()[2].name == "Name",
               "public table API returned the wrong schema");
+        check(tables[1].indexes().size() == 1 && tables[1].indexes()[0].name == "Id" &&
+                  tables[1].indexes()[0].unique && tables[1].indexes()[0].primary_key &&
+                  tables[1].indexes()[0].columns.size() == 1 &&
+                  tables[1].indexes()[0].columns[0].name == "Id" &&
+                  tables[1].indexes()[0].columns[0].ascending,
+              "public table API returned the wrong logical index definition");
 
         auto rows = tables[1].rows();
         const auto first = rows.next();
         check(first && first->size() == 5 && std::get<std::int32_t>(first->at(0)) == 1 &&
                   std::get<std::string>(first->at(2)) == "用户表",
               "public row cursor did not decode the first row");
+        check(first->id() == rea_jackcess::RowId{4, 0},
+              "sequential row cursor returned the wrong physical row identifier");
         const auto second = rows.next();
         check(second && std::get<std::int32_t>(second->at(0)) == 2 &&
                   std::get<std::string>(second->at(2)) == "A中B",
@@ -465,6 +667,41 @@ void test_public_database_table_and_row_cursor() {
     std::filesystem::remove(path, ignored);
 }
 
+void test_public_index_row_cursor() {
+    const auto path = make_indexed_database_fixture();
+    try {
+        auto database = rea_jackcess::Database::open(path);
+        const auto tables = database.tables();
+        auto rows = tables[1].rows_by_index("Id");
+        std::vector<std::int32_t> ids;
+        std::vector<rea_jackcess::RowId> row_ids;
+        while (auto row = rows.next()) {
+            ids.push_back(std::get<std::int32_t>(row->at(0)));
+            row_ids.push_back(row->id());
+        }
+        check(ids == std::vector<std::int32_t>({1, 2, 3}),
+              "index row cursor did not follow the B-tree leaf order");
+        check(row_ids == std::vector<rea_jackcess::RowId>({{4, 0}, {4, 1}, {4, 2}}),
+              "index row cursor returned incorrect physical row identifiers");
+        check(row_ids[0] < row_ids[1] && !(row_ids[1] < row_ids[0]),
+              "row identifiers did not compare by page and row number");
+
+        bool missing_index_was_reported = false;
+        try {
+            tables[1].rows_by_index("Missing");
+        } catch (const std::invalid_argument&) {
+            missing_index_was_reported = true;
+        }
+        check(missing_index_was_reported, "unknown index name was accepted");
+    } catch (...) {
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+        throw;
+    }
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+}
+
 void test_canonical_row_error_includes_row_number() {
     const auto path = make_canonical_row_error_fixture();
     try {
@@ -489,7 +726,7 @@ void test_error_contains_row_and_column_context() {
     {
         std::fstream output(path, std::ios::binary | std::ios::in | std::ios::out);
         constexpr std::streamoff first_column_header =
-            static_cast<std::streamoff>(2 * page_size + 63 + 21);
+            static_cast<std::streamoff>(2 * page_size + 63 + 12 + 21);
         output.seekp(first_column_header, std::ios::beg);
         const std::array<std::uint8_t, 2> invalid_offset{0xff, 0xff};
         output.write(reinterpret_cast<const char*>(invalid_offset.data()),
@@ -528,8 +765,10 @@ int main() {
         test_sha256_and_jet4_code_page();
         test_usage_map_and_system_catalog();
         test_table_schema_catalog();
+        test_column_property_map_nullability();
         test_table_context_is_preserved_for_usage_map_errors();
         test_public_database_table_and_row_cursor();
+        test_public_index_row_cursor();
         test_canonical_row_error_includes_row_number();
         test_error_contains_row_and_column_context();
     } catch (const std::exception& error) {

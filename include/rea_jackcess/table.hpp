@@ -44,7 +44,35 @@ struct ColumnInfo {
     std::uint8_t precision;
     std::uint8_t scale;
     bool fixed;
+    // Null when the source file did not expose a decodable Required property map.
     std::optional<bool> nullable;
+};
+
+struct IndexColumnInfo {
+    std::string name;
+    std::uint16_t column_number;
+    bool ascending;
+};
+
+struct IndexInfo {
+    std::string name;
+    std::uint32_t index_number;
+    std::uint32_t physical_index_number;
+    std::vector<IndexColumnInfo> columns;
+    std::uint32_t root_page_number;
+    std::uint32_t unique_entry_count;
+    std::uint8_t flags;
+    bool unique;
+    bool ignore_nulls;
+    bool required;
+    bool primary_key;
+    bool foreign_key;
+    std::optional<std::uint8_t> referenced_index_type;
+    std::optional<std::uint32_t> referenced_index_number;
+    std::optional<std::uint32_t> referenced_table_page_number;
+    bool cascade_updates;
+    bool cascade_deletes;
+    bool cascade_set_null;
 };
 
 // Accessors on a moved-from Table throw std::logic_error.
@@ -56,8 +84,11 @@ public:
     bool is_linked() const;
     std::uint32_t row_count_header() const;
     const std::vector<ColumnInfo>& columns() const;
+    const std::vector<IndexInfo>& indexes() const;
     // Creates a single-pass cursor that decodes one row at a time.
     RowCursor rows() const;
+    // Scans rows in the order of the named index. The index name must match exactly.
+    RowCursor rows_by_index(const std::string& index_name) const;
 
 private:
     explicit Table(std::shared_ptr<detail::TableState> state);

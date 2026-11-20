@@ -1,12 +1,14 @@
 # rea-jackcess
 
-rea-jackcess 是 Jackcess 的 C++ 重写项目。首期目标是在原生 Linux x86_64 和 ARM64 上交付 C++17 核心库，完整对齐 Java Jackcess 5.2.0 对 Access MDB 和 ACCDB 文件的公开能力与可观察行为。
+`rea-jackcess` 正在用 C++17 重写 Java [Jackcess](https://github.com/spannm/jackcess)，目标是原生 Linux x86_64 和 ARM64 核心库，按固定基线 Jackcess 5.2.0 对齐 Access MDB/ACCDB 的公开能力和可观察行为。Jet4 读写是首个内部里程碑；PGeo 导入和已有样本克隆是依赖核心库的独立交付与验收，不属于核心库的格式解析职责。
 
 ## 当前状态
 
-已实现 Jet/ACE 版本头识别、只读页访问，以及 Jet4 表定义、Usage Map、数据页行目录、普通本地表 schema 发现和逐行读取。字段值解码覆盖布尔值、整数、浮点、日期、Money/Numeric、文本、GUID、Binary、Memo/OLE 长值；Memo/OLE 保留原始负载字节，无法表示的短日期 serial 输出为 `$dateOutOfRange`。`DatabaseError` 可携带文件、页、表、行和列信息。CLI 的 `inspect` 输出内部诊断摘要，`canonical` 输出 Jet4 canonical JSON v1，包括文件元数据、表/列定义、类型化行值及行集哈希。
+目前已实现 Jet/ACE 版本头识别、只读页访问，以及 Jet4 表定义、Usage Map、数据页行目录、普通本地表 schema 发现和逐行读取。基础字段解码覆盖布尔值、整数、浮点、日期、Money/Numeric、文本、GUID、Binary、Memo/OLE 长值；Memo/OLE 保留原始负载字节，无法表示的短日期 serial 输出为 `$dateOutOfRange`。`DatabaseError` 可携带文件、页、表、行和列信息。公开 API 提供只读 `Database`、`Table`、`RowCursor`、含物理 `RowId` 的 `Row` 和 `Value`；`Table::indexes()` 返回逻辑索引定义，`Table::rows_by_index()` 可按指定 Jet4 索引顺序扫描记录。CLI 的 `inspect` 输出内部诊断摘要，`canonical` 输出 Jet4 canonical JSON v1，包括文件元数据、表/列定义、逻辑/物理索引定义、已支持类型的行值及行集哈希。
 
-P1 尚未验收：列属性（包括可空性）、逻辑/物理索引和 Jet4 写入仍待实现；公开 `Database`、`Table`、`RowCursor`、`Row` 和 `Value` 已提供只读 Jet4 读取入口。复杂列或无法识别的字段类型会保留为不支持值并记录在 `errors` 中。完整 P0 行为矩阵和上游同步 CI 也待实施。只读本地样本 `test_data_only_read/test_mdb.mdb`（SHA-256 `0bc0acb9c732de1e17c43c2d0a6019f7b5a62ccf83c5818a1bc42db7dbc460c6`）的系统目录 51 行与 MDBTools 1.0.1 导出在 5 个字段上匹配；另与 Jackcess 5.2.0 对照的 43 张共同用户表无 schema 或行值差异。样本不属于仓库测试资产。
+当前仍是 P1 开发中，不能视为 P1 或 Jackcess 兼容性验收完成。索引读取已能从 B-tree 定位最左叶页并沿叶页链返回行；键值语义解码、按键查找/范围游标、索引创建与维护尚未实现。列 `Required` 属性已用于推导公开 `ColumnInfo::nullable`；其他库/表/列属性、Jet4 写入、尚未冻结的 P0 行为矩阵及上游同步 CI 仍待实施。复杂列或无法识别的字段类型会保留为不支持值并记录在 `errors` 中。
+
+已有的本机只读样本 `test_data_only_read/test_mdb.mdb`（SHA-256 `0bc0acb9c732de1e17c43c2d0a6019f7b5a62ccf83c5818a1bc42db7dbc460c6`）曾用于有限对照：系统目录 51 行与 MDBTools 1.0.1 导出在 5 个字段上匹配；Jackcess 5.2.0 canonical 对照的 43 张共同用户表无 schema 或行值差异；138 个用户逻辑索引的逐索引 `page:row` 遍历序列与 Jackcess 完全一致。该样本不属于仓库测试资产，这些结果也不替代本仓库回归或产品验收。
 
 Jet4 读写是第一个内部里程碑，核心库在完整矩阵通过后发布。PGeo 导入和样本克隆使用独立的 GIS 验收关口，各自发布。
 
@@ -21,25 +23,30 @@ cmake --build build
 ./build/rea-jackcess --version
 ```
 
-`rea_jackcess::core` 是核心库的 CMake 链接目标。CLI 提供 `--help`、`--version`、`inspect <database-file>` 和 `canonical <database-file>`。当前 `canonical` 对 Jet4 输出已支持的 schema 与行值；属性图和索引定义仍未读取。
+`rea_jackcess::core` 是核心库的 CMake 链接目标。CLI 提供 `--help`、`--version`、`inspect <database-file>` 和 `canonical <database-file>`。当前 `canonical` 对 Jet4 输出已支持的 schema、`Required` 推导的列可空性、逻辑/物理索引定义和行值；CLI 尚未提供索引遍历命令。
 
 ## 包与代码分类
 
 | 目录 | 职责 |
 |---|---|
 | `include/rea_jackcess/` | 对外 C++ 接口。当前有 RAII 文件句柄，以及 Jet4 只读 `Database`、`Table`、`RowCursor`、`Row` 和 `Value`；属性接口与构建器待后续工作包。 |
+| `src/api/` | 公开类的实现门面，组合内部解析模块；当前提供只读数据库、表、行和游标实现。 |
 | `src/format/` | Jet/ACE 版本和格式布局；当前识别已列出的版本头，按格式分别补充页、记录及编码规则。 |
 | `src/page/` | 有界随机页 I/O 和 Jet4 数据页行目录；后续加入页缓存、页分配和写入通道。 |
-| `src/catalog/` | 系统目录、表定义、列 schema、Usage Map 和通用行读取；当前发现普通本地表并装载 Jet4 表 schema/记录。 |
+| `src/catalog/` | 系统目录、表定义、列 schema、`LvProp` 中的列 `Required` 属性、逻辑/物理索引定义、Usage Map 和通用行读取；当前发现普通本地表并装载 Jet4 表 schema/记录。 |
 | `src/value/` | 字段解码、类型化值和长值；当前提供 Jet4 基础标量、日期、十进制、文本、GUID、二进制及 Memo/OLE 长值解码。 |
-| `src/util/` | 与数据库解析相关的通用内部工具；当前提供 SHA-256 文件摘要。 |
-| `src/metadata/` | 表与列属性、关系、逻辑和物理索引、排序键及索引游标；待实现。 |
+| `src/metadata/` | 库/表/列属性、关系、约束和逻辑索引语义；待实现。当前 Jet4 属性块和索引定义解析留在 `catalog`。 |
+| `src/index/` | Jet4 B-tree 页遍历；当前支持沿索引叶页顺序读取行位置。键值语义解码、查找/范围游标、索引维护待实现。 |
+| `src/expression/` | 默认值、校验、计算列和查询表达式；待实现。 |
+| `src/query/` | 行过滤、组合游标和公开查询流程；待实现。 |
 | `src/write/` | 新库构建、表结构、页分配、行插入/更新/删除和索引维护；待实现。 |
+| `src/util/` | 与具体格式无关的内部帮助代码；当前提供 SHA-256 文件摘要。 |
 | `tools/cli/` | 诊断和互操作对照工具；当前提供帮助、版本、Jet4 `inspect` 摘要和含行值的 `canonical` JSON v1。 |
-| `tests/` | CTest 单元与格式回归入口；当前覆盖头识别、页 I/O、表定义、Usage Map、目录行、溢出行、普通表 schema、公开表/游标/行接口、文本和 Jet4 值解码、SHA-256 和代码页解码。 |
+| `tools/validation/` | 手动互操作探针；当前提供 C++ 与 Jackcess 5.2.0 的索引行序列导出器，供同一样本逐索引比较。 |
+| `tests/` | CTest 单元与格式回归入口；当前覆盖头识别、页 I/O、表定义、Usage Map、目录行、溢出行、普通表 schema、列属性映射、逻辑/物理索引定义、公开表/索引/游标/行接口、文本和 Jet4 值解码、SHA-256 和代码页解码。 |
 | `adapters/pgeo/`（规划） | 单独依赖核心库和 GDAL 的 PGeo 导入、样本克隆适配。 |
 
-C++ 以目录划分内部模块：公开接口使用 `rea_jackcess` 命名空间，内部实现使用 `rea_jackcess::detail`。构建目标为 `rea_jackcess::core`（静态核心库）、`rea_jackcess_cli`（产物名 `rea-jackcess`）、`rea_jackcess_tests` 和 `rea_jackcess_catalog_tests`。
+C++ 以目录划分内部模块：公开接口使用 `rea_jackcess` 命名空间，内部实现使用 `rea_jackcess::detail`。现有 `api`、`format`、`page`、`catalog`、`value`、`index`、`util` 由 `src/CMakeLists.txt` 编译为内部对象包，并合并进单一 `rea_jackcess::core` 静态库。构建目标还包括 `rea_jackcess_cli`（产物名 `rea-jackcess`）、`rea_jackcess_tests` 和 `rea_jackcess_catalog_tests`。完整包边界和依赖方向见[源码架构](src/ARCHITECTURE.md)。
 
 ### 公开接口分类
 
@@ -49,13 +56,13 @@ C++ 以目录划分内部模块：公开接口使用 `rea_jackcess` 命名空间
 |---|---|
 | `DatabaseFile` | 当前接口：以 RAII 方式打开文件、返回格式信息和原始页。 |
 | `Database` / `DatabaseBuilder` | `Database::open` 当前打开 Jet4 只读库、枚举本地表并返回解析诊断；建库与库属性 API 待实现。 |
-| `Table` / `TableBuilder` | 当前读取表/列 schema，并创建逐行游标；表属性与结构变更待实现。 |
-| `RowCursor` / `Row` | 当前逐行读取；索引遍历与字段名便捷访问待实现。 |
+| `Table` / `TableBuilder` | 当前读取表/列 schema 和逻辑索引定义，并创建顺序或按索引排序的逐行游标；表属性、索引查找/范围操作与结构变更待实现。 |
+| `RowCursor` / `Row` / `RowId` | 当前支持顺序读取、Jet4 索引叶链顺序读取和物理页/行标识；字段名便捷访问待实现。 |
 | `Value` | 当前表示已实现类型、NULL、超范围日期、Memo/OLE 负载及不支持类型。 |
-| 属性与索引 API | 读取库/表/列属性、关系和索引，并按已验收能力执行查询。 |
+| 属性与索引 API | 当前读取列 `Required` 属性与索引定义，并支持按索引顺序扫描；其余属性、关系、按键查找和范围查询待实现。 |
 | `DatabaseError` | 以稳定错误码报告失败，并携带可获得的文件、页、表、行和列上下文。 |
 
-依赖从高层流向低层：`write` 使用 `metadata`、`value`、`catalog`、`page` 和 `format`；`metadata` 使用 `catalog`、`value`、`page` 和 `format`；`catalog` 使用 `value`、`page` 和 `format`；`value` 使用 `page` 和 `format`；`page` 使用 `format`。公开只读接口组合目录、行和值读取；canonical CLI 仍直接调用内部解析器，以保留阶段和列级诊断。PGeo 适配器通过公开接口使用核心库，不进入核心库依赖图；核心库不依赖 JVM、libmdb 或 GDAL。
+依赖从高层流向低层：`api` 组合 `query`、`metadata`、`index`、`catalog` 和 `value`；`query` 使用 `expression`、`index`、`metadata`、`catalog` 和 `value`；`write` 使用 `metadata`、`index`、`catalog`、`value`、`page` 和 `format`；`index` 使用 `metadata`、`catalog`、`value`、`page` 和 `format`；`metadata` 使用 `catalog`、`value` 和 `format`；`catalog` 使用 `value`、`page` 和 `format`；`value` 使用 `page` 和 `format`；`page` 使用 `format`。详细职责见[源码架构](src/ARCHITECTURE.md)。canonical CLI 仍直接调用内部解析器，以保留阶段和列级诊断。PGeo 适配器通过公开接口使用核心库，不进入核心库依赖图；核心库不依赖 JVM、libmdb 或 GDAL。
 
 ## 从哪里开始
 

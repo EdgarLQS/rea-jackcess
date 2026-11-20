@@ -26,12 +26,18 @@ constexpr std::uint64_t physical_index_count_offset = 51;
 constexpr std::uint64_t owned_pages_offset = 55;
 constexpr std::uint64_t free_space_pages_offset = 59;
 constexpr std::uint64_t index_definition_size = 12;
+constexpr std::uint64_t physical_index_definition_size = 52;
+constexpr std::uint64_t logical_index_definition_size = 28;
 constexpr std::uint64_t column_definition_size = 25;
 constexpr std::uint64_t trailer_size = 2;
 constexpr std::uint64_t index_definition_offset = 63;
 constexpr std::uint16_t maximum_columns_per_table = 255;
 constexpr std::uint32_t maximum_indexes_per_table = 32;
 constexpr std::uint16_t maximum_column_name_bytes = 128;
+constexpr std::uint16_t maximum_index_name_bytes = 128;
+constexpr std::uint16_t maximum_index_columns = 10;
+constexpr std::uint16_t unused_index_column = 0xffff;
+constexpr std::uint8_t ascending_column_flag = 0x01;
 
 [[noreturn]] void corrupted_page(const PageFile& file,
                                  std::uint64_t page_number,
@@ -120,28 +126,34 @@ std::vector<std::uint8_t> read_definition_span(const PageFile& file,
     return result;
 }
 
-std::vector<std::string> read_column_names(const PageFile& file,
-                                           std::uint64_t first_page_number,
-                                           const std::vector<std::uint64_t>& continuation_pages,
-                                           std::uint64_t definition_size,
-                                           std::uint64_t names_offset,
-                                           std::uint16_t column_count) {
+struct NamedItems {
     std::vector<std::string> names;
-    names.reserve(column_count);
+    std::uint64_t end_offset;
+};
 
-    for (std::uint16_t index = 0; index < column_count; ++index) {
+NamedItems read_names(const PageFile& file,
+                      std::uint64_t first_page_number,
+                      const std::vector<std::uint64_t>& continuation_pages,
+                      std::uint64_t definition_size,
+                      std::uint64_t names_offset,
+                      std::uint32_t count,
+                      std::uint16_t maximum_name_bytes) {
+    std::vector<std::string> names;
+    names.reserve(count);
+
+    for (std::uint32_t index = 0; index < count; ++index) {
         if (names_offset > definition_size || 2 > definition_size - names_offset) {
-            corrupted_page(file, first_page_number, "Column name length extends beyond the table definition");
+            corrupted_page(file, first_page_number, "Name length extends beyond the table definition");
         }
         const auto encoded_length =
             read_definition_span(file, first_page_number, continuation_pages, names_offset, 2);
         const std::uint16_t name_length = read_u16(file, first_page_number, encoded_length, 0);
         names_offset += 2;
-        if (name_length == 0 || name_length > maximum_column_name_bytes || name_length % 2 != 0) {
-            corrupted_page(file, first_page_number, "Column name has an invalid UTF-16LE byte length");
+        if (name_length == 0 || name_length > maximum_name_bytes || name_length % 2 != 0) {
+            corrupted_page(file, first_page_number, "Name has an invalid UTF-16LE byte length");
         }
         if (names_offset > definition_size || name_length > definition_size - names_offset) {
-            corrupted_page(file, first_page_number, "Column name extends beyond the table definition");
+            corrupted_page(file, first_page_number, "Name extends beyond the table definition");
         }
 
         const auto encoded_name =
@@ -150,7 +162,14 @@ std::vector<std::string> read_column_names(const PageFile& file,
         names_offset += name_length;
     }
 
-    return names;
+    return {std::move(names), names_offset};
+}
+
+std::int32_t signed_u32(std::uint32_t value) {
+    if (value <= static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())) {
+        return static_cast<std::int32_t>(value);
+    }
+    return static_cast<std::int32_t>(-1 - static_cast<std::int64_t>(~value));
 }
 
 }
@@ -204,6 +223,10 @@ TableDefinition read_table_definition(const PageFile& file, std::uint64_t page_n
     const std::uint64_t minimum_size = index_definition_offset +
                                        static_cast<std::uint64_t>(physical_index_count) * index_definition_size +
                                        static_cast<std::uint64_t>(column_count) * column_definition_size +
+                                       static_cast<std::uint64_t>(column_count) * 2 +
+                                       static_cast<std::uint64_t>(physical_index_count) * physical_index_definition_size +
+                                       static_cast<std::uint64_t>(logical_index_count) * logical_index_definition_size +
+                                       static_cast<std::uint64_t>(logical_index_count) * 2 +
                                        trailer_size;
     if (minimum_size > definition_size) {
         corrupted_page(file, page_number, "Table definition is too short for its declared columns and indexes");
@@ -249,19 +272,20 @@ TableDefinition read_table_definition(const PageFile& file, std::uint64_t page_n
                                                      continuation_pages,
                                                      column_definition_offset,
                                                      column_header_bytes);
-    const auto column_names = read_column_names(file,
-                                                page_number,
-                                                continuation_pages,
-                                                definition_size,
-                                                column_name_offset,
-                                                column_count);
+    const auto named_columns = read_names(file,
+                                          page_number,
+                                          continuation_pages,
+                                          definition_size,
+                                          column_name_offset,
+                                          column_count,
+                                          maximum_column_name_bytes);
 
     std::vector<ColumnDefinition> columns;
     columns.reserve(column_count);
     for (std::uint16_t index = 0; index < column_count; ++index) {
         const std::uint64_t offset = static_cast<std::uint64_t>(index) * column_definition_size;
         columns.push_back({
-            column_names[index],
+            named_columns.names[index],
             column_headers[offset],
             read_u16(file, page_number, column_headers, offset + 5),
             read_u16(file, page_number, column_headers, offset + 7),
@@ -278,6 +302,93 @@ TableDefinition read_table_definition(const PageFile& file, std::uint64_t page_n
         return left.column_number < right.column_number;
     });
 
+    std::vector<PhysicalIndexDefinition> physical_indexes;
+    physical_indexes.reserve(physical_index_count);
+    std::uint64_t index_data_offset = named_columns.end_offset;
+    for (std::uint32_t index = 0; index < physical_index_count; ++index) {
+        if (index_data_offset > definition_size ||
+            physical_index_definition_size > definition_size - index_data_offset) {
+            corrupted_page(file, page_number, "Physical index definition extends beyond the table definition");
+        }
+        const auto encoded = read_definition_span(file,
+                                                  page_number,
+                                                  continuation_pages,
+                                                  index_data_offset,
+                                                  physical_index_definition_size);
+        PhysicalIndexDefinition physical;
+        physical.unique_entry_count = read_u32(file,
+                                               page_number,
+                                               first_page,
+                                               index_definition_offset +
+                                                   static_cast<std::uint64_t>(index) * index_definition_size + 4);
+        physical.columns.reserve(maximum_index_columns);
+        for (std::uint16_t column = 0; column < maximum_index_columns; ++column) {
+            const std::uint64_t offset = 4 + static_cast<std::uint64_t>(column) * 3;
+            const std::uint16_t column_number = read_u16(file, page_number, encoded, offset);
+            const std::uint8_t column_flags = encoded[offset + 2];
+            if (column_number == unused_index_column) {
+                continue;
+            }
+            const auto defined_column = std::find_if(columns.begin(), columns.end(), [&](const auto& candidate) {
+                return candidate.column_number == column_number;
+            });
+            if (defined_column == columns.end()) {
+                corrupted_page(file, page_number, "Physical index references an undefined column number");
+            }
+            physical.columns.push_back({column_number, (column_flags & ascending_column_flag) != 0});
+        }
+        physical.owned_pages = {encoded[34], read_u24(file, page_number, encoded, 35)};
+        physical.root_page_number = read_u32(file, page_number, encoded, 38);
+        physical.flags = encoded[46];
+        physical.extended_flags = encoded[47];
+        physical_indexes.push_back(std::move(physical));
+        index_data_offset += physical_index_definition_size;
+    }
+
+    const std::uint64_t logical_index_bytes =
+        static_cast<std::uint64_t>(logical_index_count) * logical_index_definition_size;
+    if (index_data_offset > definition_size || logical_index_bytes > definition_size - index_data_offset) {
+        corrupted_page(file, page_number, "Logical index definitions extend beyond the table definition");
+    }
+    const auto encoded_logical_indexes = read_definition_span(file,
+                                                              page_number,
+                                                              continuation_pages,
+                                                              index_data_offset,
+                                                              logical_index_bytes);
+    std::vector<LogicalIndexDefinition> indexes;
+    indexes.reserve(logical_index_count);
+    for (std::uint32_t index = 0; index < logical_index_count; ++index) {
+        const std::uint64_t offset = static_cast<std::uint64_t>(index) * logical_index_definition_size;
+        const std::uint32_t index_number = read_u32(file, page_number, encoded_logical_indexes, offset + 4);
+        const std::uint32_t index_data_number = read_u32(file, page_number, encoded_logical_indexes, offset + 8);
+        if (index_data_number >= physical_index_count) {
+            corrupted_page(file, page_number, "Logical index references an undefined physical index");
+        }
+        indexes.push_back({
+            index_number,
+            index_data_number,
+            encoded_logical_indexes[offset + 12],
+            signed_u32(read_u32(file, page_number, encoded_logical_indexes, offset + 13)),
+            read_u32(file, page_number, encoded_logical_indexes, offset + 17),
+            encoded_logical_indexes[offset + 21],
+            encoded_logical_indexes[offset + 22],
+            encoded_logical_indexes[offset + 23],
+            {},
+        });
+    }
+    index_data_offset += logical_index_bytes;
+
+    const auto named_indexes = read_names(file,
+                                          page_number,
+                                          continuation_pages,
+                                          definition_size,
+                                          index_data_offset,
+                                          logical_index_count,
+                                          maximum_index_name_bytes);
+    for (std::size_t index = 0; index < indexes.size(); ++index) {
+        indexes[index].name = named_indexes.names[index];
+    }
+
     return {
         definition_size,
         row_count,
@@ -291,6 +402,8 @@ TableDefinition read_table_definition(const PageFile& file, std::uint64_t page_n
         owned_pages,
         free_space_pages,
         std::move(columns),
+        std::move(physical_indexes),
+        std::move(indexes),
     };
 }
 

@@ -1,5 +1,6 @@
 #include "table_catalog.hpp"
 
+#include "property_map.hpp"
 #include "system_catalog.hpp"
 
 #include <utility>
@@ -50,6 +51,32 @@ TableSchemaCatalog read_table_schema_catalog(const PageFile& file) {
 
         try {
             auto definition = read_table_definition(file, static_cast<std::uint64_t>(*object.id));
+            if (object.property_column_present) {
+                definition.column_properties_available = true;
+                if (object.property_error) {
+                    add_error(result, name, *object.property_error, object.property_error_page);
+                } else {
+                    std::vector<std::string> column_names;
+                    column_names.reserve(definition.columns.size());
+                    for (const auto& column : definition.columns) {
+                        column_names.push_back(column.name);
+                    }
+                    try {
+                        const std::vector<bool> nullable = read_column_nullability(
+                            file,
+                            name,
+                            object.page_number,
+                            object.row_number,
+                            column_names,
+                            object.property_bytes.value_or(std::vector<std::uint8_t>{}));
+                        for (std::size_t index = 0; index < definition.columns.size(); ++index) {
+                            definition.columns[index].nullable = nullable[index];
+                        }
+                    } catch (const DatabaseError& error) {
+                        add_error(result, name, error.what(), error.page_number());
+                    }
+                }
+            }
             const bool is_user_table = definition.table_type == user_table_type;
             std::string object_type = "TABLE";
             if (definition.table_type == system_table_type) {
@@ -59,6 +86,7 @@ TableSchemaCatalog read_table_schema_catalog(const PageFile& file) {
             }
             result.tables.push_back({
                 name,
+                static_cast<std::uint64_t>(*object.id),
                 std::move(object_type),
                 is_user_table,
                 false,
