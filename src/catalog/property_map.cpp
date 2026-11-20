@@ -204,4 +204,110 @@ std::vector<bool> read_column_nullability(const PageFile& file,
     return nullable;
 }
 
+std::optional<std::string> read_text_property(const PageFile& file,
+                                              const std::string& object_name,
+                                              std::uint64_t page_number,
+                                              std::uint16_t system_row_number,
+                                              const std::vector<std::uint8_t>& property_bytes,
+                                              std::string_view property_name) {
+    if (property_bytes.empty()) {
+        return std::nullopt;
+    }
+    if (property_bytes.size() < 4 || property_bytes[0] != 'M' || property_bytes[1] != 'R' ||
+        property_bytes[2] != '2' || property_bytes[3] != 0) {
+        invalid_property_map(file, object_name, page_number, system_row_number,
+                             "Property map header is not recognized");
+    }
+
+    std::vector<std::string> property_names;
+    std::optional<std::string> result;
+    std::size_t offset = 4;
+    while (offset < property_bytes.size()) {
+        if (property_bytes.size() - offset < 6) {
+            invalid_property_map(file, object_name, page_number, system_row_number,
+                                 "Property map block header is truncated");
+        }
+        const std::uint32_t block_length = read_u32(property_bytes, offset);
+        const std::uint16_t block_type = read_u16(property_bytes, offset + 4);
+        if (block_length < 6 || block_length > property_bytes.size() - offset) {
+            invalid_property_map(file, object_name, page_number, system_row_number,
+                                 "Property map block has an invalid length");
+        }
+        const std::size_t block_end = offset + block_length;
+        std::size_t block_offset = offset + 6;
+
+        if (block_type == property_name_list) {
+            property_names.clear();
+            while (block_offset < block_end) {
+                property_names.push_back(read_property_name(file,
+                                                            object_name,
+                                                            page_number,
+                                                            system_row_number,
+                                                            property_bytes,
+                                                            block_offset,
+                                                            block_end));
+            }
+        } else if (block_offset < block_end) {
+            if (block_end - block_offset < 4) {
+                invalid_property_map(file, object_name, page_number, system_row_number,
+                                     "Property map name block is truncated");
+            }
+            const std::uint32_t map_name_length = read_u32(property_bytes, block_offset);
+            if (map_name_length < 6 || map_name_length > block_end - block_offset) {
+                invalid_property_map(file, object_name, page_number, system_row_number,
+                                     "Property map name block has an invalid length");
+            }
+            const std::size_t map_name_end = block_offset + map_name_length;
+            std::size_t name_offset = block_offset + 4;
+            const std::string map_name = read_property_name(file,
+                                                            object_name,
+                                                            page_number,
+                                                            system_row_number,
+                                                            property_bytes,
+                                                            name_offset,
+                                                            map_name_end);
+            if (name_offset != map_name_end) {
+                invalid_property_map(file, object_name, page_number, system_row_number,
+                                     "Property map name block contains trailing bytes");
+            }
+            block_offset = map_name_end;
+
+            while (block_offset < block_end) {
+                if (block_end - block_offset < 8) {
+                    invalid_property_map(file, object_name, page_number, system_row_number,
+                                         "Property map value is truncated");
+                }
+                const std::uint16_t value_length = read_u16(property_bytes, block_offset);
+                if (value_length < 8 || value_length > block_end - block_offset) {
+                    invalid_property_map(file, object_name, page_number, system_row_number,
+                                         "Property map value has an invalid length");
+                }
+                const std::size_t value_end = block_offset + value_length;
+                const std::uint8_t type = property_bytes[block_offset + 3];
+                const std::uint16_t name_index = read_u16(property_bytes, block_offset + 4);
+                const std::uint16_t data_size = read_u16(property_bytes, block_offset + 6);
+                const std::size_t value_data = block_offset + 8;
+                if (data_size > value_end - value_data || name_index >= property_names.size()) {
+                    invalid_property_map(file, object_name, page_number, system_row_number,
+                                         "Property map value data or name index is invalid");
+                }
+                if (block_type == 0 && map_name.empty() &&
+                    equals_ignore_ascii_case(property_names[name_index], property_name)) {
+                    if (result || type != 0x0a || data_size % 2 != 0 || value_length != 8 + data_size) {
+                        invalid_property_map(file, object_name, page_number, system_row_number,
+                                             "Text property has an invalid type, size, or duplicate value");
+                    }
+                    std::vector<std::uint8_t> encoded(
+                        property_bytes.begin() + static_cast<std::ptrdiff_t>(value_data),
+                        property_bytes.begin() + static_cast<std::ptrdiff_t>(value_data + data_size));
+                    result = decode_utf16le(encoded);
+                }
+                block_offset = value_end;
+            }
+        }
+        offset = block_end;
+    }
+    return result;
+}
+
 }

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace rea_jackcess::detail {
@@ -24,6 +25,8 @@ struct SystemCatalogObject {
 };
 
 std::vector<SystemCatalogObject> read_system_catalog_objects(const PageFile& file,
-                                                              const TableDefinition& definition);
+                                                              const TableDefinition& definition,
+                                                              std::optional<std::string_view> property_object_name =
+                                                                  std::nullopt);
 
 }

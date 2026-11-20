@@ -2,8 +2,11 @@
 
 #include "jet4_fixed_numeric.hpp"
 #include "jet4_global_usage_map.hpp"
+#include "jet4_variable_type.hpp"
 
 #include "../util/little_endian.hpp"
+#include "../catalog/property_map.hpp"
+#include "../catalog/system_catalog.hpp"
 #include "../catalog/table_definition.hpp"
 #include "../catalog/row_reader.hpp"
 #include "../catalog/usage_map.hpp"
@@ -138,38 +141,137 @@ std::uint64_t fixed_row_data_size(const PageFile& file,
         definition.maximum_column_count != definition.columns.size()) {
         unsupported_table_write(file,
                                 table.name,
-                                "Fixed numeric row writing requires a dense schema without deleted columns");
-    }
-    if (definition.variable_column_count != 0) {
-        unsupported_table_write(file,
-                                table.name,
-                                "Fixed numeric row writing does not support variable-column table layouts");
+                                "Row writing requires a dense schema without deleted columns");
     }
     std::uint64_t data_size = 0;
+    std::vector<const ColumnDefinition*> variable_columns(definition.variable_column_count, nullptr);
     for (std::size_t index = 0; index < definition.columns.size(); ++index) {
         const auto& column = definition.columns[index];
         if (column.column_number != index) {
             unsupported_column_write(file,
                                      table,
                                      column,
-                                     "Fixed numeric row writing requires contiguous column numbers");
+                                     "Row writing requires contiguous column numbers");
         }
         const auto* numeric_type = jet4_fixed_numeric_type(column.type);
-        if (numeric_type == nullptr || (column.flags & 0x01) == 0 || column.length != numeric_type->byte_size) {
+        const auto* variable_type = jet4_variable_type(column.type);
+        if ((numeric_type == nullptr) == (variable_type == nullptr)) {
+            unsupported_column_write(file, table, column, "Row writing encountered an unsupported column type");
+        }
+        if (numeric_type != nullptr) {
+            if ((column.flags & 0x01) == 0 || column.length != numeric_type->byte_size) {
+                unsupported_column_write(file,
+                                         table,
+                                         column,
+                                         "Fixed numeric column has an unsupported Jet4 storage layout");
+            }
+            if (column.fixed_data_offset != data_size) {
+                unsupported_column_write(file,
+                                         table,
+                                         column,
+                                         "Row writing requires contiguous fixed-column offsets");
+            }
+            data_size += column.length;
+            continue;
+        }
+
+        if ((column.flags & 0x01) != 0 || column.variable_table_index >= variable_columns.size() ||
+            variable_columns[column.variable_table_index] != nullptr || column.length == 0 ||
+            column.length > variable_type->maximum_byte_size) {
             unsupported_column_write(file,
                                      table,
                                      column,
-                                     "Fixed numeric row writing supports BYTE, SHORT, LONG, SINGLE, and DOUBLE columns only");
+                                     "Variable column has an unsupported Jet4 storage layout");
         }
-        if (column.fixed_data_offset != data_size) {
-            unsupported_column_write(file,
-                                     table,
-                                     column,
-                                     "Fixed numeric row writing requires contiguous fixed-column offsets");
+        if (variable_type->public_type == DataType::text && column.length % 2 != 0) {
+            unsupported_column_write(file, table, column, "TEXT column has an odd UTF-16 byte capacity");
         }
-        data_size += column.length;
+        variable_columns[column.variable_table_index] = &column;
+    }
+    if (std::any_of(variable_columns.begin(), variable_columns.end(), [](const auto* column) {
+            return column == nullptr;
+        })) {
+        unsupported_table_write(file, table.name, "Variable-column indexes are not contiguous");
     }
     return data_size;
+}
+
+void append_u16(std::vector<std::uint8_t>& bytes, std::uint16_t value) {
+    bytes.push_back(static_cast<std::uint8_t>(value & 0xff));
+    bytes.push_back(static_cast<std::uint8_t>((value >> 8) & 0xff));
+}
+
+[[noreturn]] void invalid_column_value(const PageFile& file,
+                                       const ReadableTableSchema& table,
+                                       const ColumnDefinition& column,
+                                       const char* message) {
+    unsupported_column_write(file, table, column, message);
+}
+
+std::vector<std::uint8_t> encode_utf8_text(const PageFile& file,
+                                           const ReadableTableSchema& table,
+                                           const ColumnDefinition& column,
+                                           const std::string& value) {
+    std::vector<std::uint8_t> encoded;
+    encoded.reserve(std::min<std::size_t>(value.size(), column.length));
+    std::size_t offset = 0;
+    std::uint64_t code_unit_count = 0;
+    while (offset < value.size()) {
+        const auto first = static_cast<std::uint8_t>(value[offset]);
+        std::uint32_t code_point = 0;
+        std::size_t sequence_length = 0;
+        if (first <= 0x7f) {
+            code_point = first;
+            sequence_length = 1;
+        } else if (first >= 0xc2 && first <= 0xdf) {
+            code_point = first & 0x1f;
+            sequence_length = 2;
+        } else if (first >= 0xe0 && first <= 0xef) {
+            code_point = first & 0x0f;
+            sequence_length = 3;
+        } else if (first >= 0xf0 && first <= 0xf4) {
+            code_point = first & 0x07;
+            sequence_length = 4;
+        } else {
+            invalid_column_value(file, table, column, "TEXT value is not valid UTF-8");
+        }
+        if (sequence_length > value.size() - offset) {
+            invalid_column_value(file, table, column, "TEXT value ends in an incomplete UTF-8 sequence");
+        }
+        for (std::size_t index = 1; index < sequence_length; ++index) {
+            const auto continuation = static_cast<std::uint8_t>(value[offset + index]);
+            if ((continuation & 0xc0) != 0x80) {
+                invalid_column_value(file, table, column, "TEXT value contains an invalid UTF-8 continuation byte");
+            }
+            code_point = (code_point << 6) | (continuation & 0x3f);
+        }
+        if ((sequence_length == 2 && code_point < 0x80) ||
+            (sequence_length == 3 && code_point < 0x800) ||
+            (sequence_length == 4 && code_point < 0x10000) ||
+            (code_point >= 0xd800 && code_point <= 0xdfff) || code_point > 0x10ffff) {
+            invalid_column_value(file, table, column, "TEXT value contains an invalid UTF-8 code point");
+        }
+
+        if (code_point <= 0xffff) {
+            encoded.push_back(static_cast<std::uint8_t>(code_point & 0xff));
+            encoded.push_back(static_cast<std::uint8_t>((code_point >> 8) & 0xff));
+            ++code_unit_count;
+        } else {
+            const std::uint32_t scalar = code_point - 0x10000;
+            const std::uint16_t high = static_cast<std::uint16_t>(0xd800 + (scalar >> 10));
+            const std::uint16_t low = static_cast<std::uint16_t>(0xdc00 + (scalar & 0x3ff));
+            encoded.push_back(static_cast<std::uint8_t>(high & 0xff));
+            encoded.push_back(static_cast<std::uint8_t>((high >> 8) & 0xff));
+            encoded.push_back(static_cast<std::uint8_t>(low & 0xff));
+            encoded.push_back(static_cast<std::uint8_t>((low >> 8) & 0xff));
+            code_unit_count += 2;
+        }
+        offset += sequence_length;
+        if (code_unit_count > column.length / 2) {
+            invalid_column_value(file, table, column, "TEXT value exceeds the column's 255-character limit");
+        }
+    }
+    return encoded;
 }
 
 TableDefinition read_current_table_definition(const PageFile& file,
@@ -194,8 +296,11 @@ TableDefinition read_current_table_definition(const PageFile& file,
         auto& column = definition.columns[index];
         const auto& cached_column = cached_definition.columns[index];
         if (column.name != cached_column.name || column.column_number != cached_column.column_number ||
-            column.type != cached_column.type || column.fixed_data_offset != cached_column.fixed_data_offset ||
-            column.length != cached_column.length) {
+            column.variable_table_index != cached_column.variable_table_index ||
+            column.column_id != cached_column.column_id || column.type != cached_column.type ||
+            column.precision != cached_column.precision || column.scale != cached_column.scale ||
+            column.flags != cached_column.flags || column.extended_flags != cached_column.extended_flags ||
+            column.fixed_data_offset != cached_column.fixed_data_offset || column.length != cached_column.length) {
             throw_table_error(DatabaseErrorCode::io_error,
                               file,
                               table.name,
@@ -210,8 +315,44 @@ TableDefinition read_current_table_definition(const PageFile& file,
 void validate_unindexed_local_table(const PageFile& file,
                                     const ReadableTableSchema& table,
                                     const TableDefinition& definition) {
+    if (file.format().version != EngineVersion::jet4 || file.format().page_size != 4096) {
+        unsupported_table_write(file, table.name, "Row modification requires a Jet4 4 KB page database");
+    }
     if (!table.is_user_table || table.is_linked) {
         unsupported_table_write(file, table.name, "Rows can only be modified in local user tables");
+    }
+    const TableDefinition system_definition = read_table_definition(file, 2);
+    const auto objects = read_system_catalog_objects(file, system_definition, std::string_view{"MSysDb"});
+    const auto database_properties = std::find_if(objects.begin(), objects.end(), [](const auto& object) {
+        return object.type && *object.type == 2 && object.name && *object.name == "MSysDb";
+    });
+    if (database_properties == objects.end()) {
+        unsupported_table_write(file,
+                                table.name,
+                                "Row modification requires a database identified as Jet4 V2000");
+    }
+    if (database_properties->property_error) {
+        DatabaseErrorContext context;
+        context.table_name = table.name;
+        context.row_number = database_properties->row_number;
+        throw DatabaseError(DatabaseErrorCode::corrupted_file,
+                            *database_properties->property_error,
+                            file.path(),
+                            database_properties->property_error_page,
+                            std::move(context));
+    }
+    const auto access_version = database_properties->property_bytes
+                                    ? read_text_property(file,
+                                                         "MSysDb",
+                                                         database_properties->page_number,
+                                                         database_properties->row_number,
+                                                         *database_properties->property_bytes,
+                                                         "AccessVersion")
+                                    : std::nullopt;
+    if (!access_version || *access_version != "08.50") {
+        unsupported_table_write(file,
+                                table.name,
+                                "Row modification currently supports Jet4 V2000 databases only");
     }
     if (!definition.indexes.empty() || !definition.physical_indexes.empty()) {
         unsupported_table_write(file,
@@ -231,15 +372,18 @@ std::vector<std::uint8_t> encode_row(const PageFile& file,
 
     const std::uint64_t null_mask_size =
         (static_cast<std::uint64_t>(definition.maximum_column_count) + 7) / 8;
-    const std::uint64_t row_size = 2 + fixed_data_size + null_mask_size;
-    if (row_size > std::numeric_limits<std::uint16_t>::max()) {
-        unsupported_table_write(file, table.name, "Encoded row exceeds Jet4 row offset limits");
-    }
-    std::vector<std::uint8_t> row(static_cast<std::size_t>(row_size), 0);
+    std::vector<std::uint8_t> row(static_cast<std::size_t>(2 + fixed_data_size), 0);
     write_u16(row, 0, definition.maximum_column_count);
+    std::vector<std::uint8_t> null_mask(static_cast<std::size_t>(null_mask_size), 0);
+    std::vector<const ColumnDefinition*> variable_columns(definition.variable_column_count, nullptr);
+    std::vector<std::optional<std::vector<std::uint8_t>>> variable_values(definition.variable_column_count);
 
     for (std::size_t index = 0; index < definition.columns.size(); ++index) {
         const auto& column = definition.columns[index];
+        const auto* variable_type = jet4_variable_type(column.type);
+        if (variable_type != nullptr) {
+            variable_columns[column.variable_table_index] = &column;
+        }
         const auto& value = values[index];
         if (std::holds_alternative<std::monostate>(value)) {
             if (column.nullable != std::optional<bool>(true)) {
@@ -256,71 +400,127 @@ std::vector<std::uint8_t> encode_row(const PageFile& file,
             continue;
         }
 
-        const std::uint64_t value_offset = 2 + column.fixed_data_offset;
-        if (column.fixed_data_offset > fixed_data_size ||
-            column.length > fixed_data_size - column.fixed_data_offset) {
-            throw_table_error(DatabaseErrorCode::corrupted_file,
-                              file,
-                              table.name,
-                              "Fixed numeric column extends beyond its fixed row data",
-                              table.definition_page_number);
-        }
+        const auto* numeric_type = jet4_fixed_numeric_type(column.type);
+        if (numeric_type != nullptr) {
+            const std::uint64_t value_offset = 2 + column.fixed_data_offset;
+            if (column.fixed_data_offset > fixed_data_size ||
+                column.length > fixed_data_size - column.fixed_data_offset) {
+                throw_table_error(DatabaseErrorCode::corrupted_file,
+                                  file,
+                                  table.name,
+                                  "Fixed column extends beyond its fixed row data",
+                                  table.definition_page_number);
+            }
 
-        bool value_encoded = false;
-        switch (column.type) {
-            case jet4_byte_type_code:
-                if (const auto* byte_value = std::get_if<std::int8_t>(&value)) {
-                    row[value_offset] = static_cast<std::uint8_t>(*byte_value);
-                    value_encoded = true;
+            bool value_encoded = false;
+            switch (column.type) {
+                case jet4_byte_type_code:
+                    if (const auto* byte_value = std::get_if<std::int8_t>(&value)) {
+                        row[value_offset] = static_cast<std::uint8_t>(*byte_value);
+                        value_encoded = true;
+                    }
+                    break;
+                case jet4_short_type_code:
+                    if (const auto* short_value = std::get_if<std::int16_t>(&value)) {
+                        write_u16(row, value_offset, static_cast<std::uint16_t>(*short_value));
+                        value_encoded = true;
+                    }
+                    break;
+                case jet4_long_type_code:
+                    if (const auto* long_value = std::get_if<std::int32_t>(&value)) {
+                        write_u32(row, value_offset, static_cast<std::uint32_t>(*long_value));
+                        value_encoded = true;
+                    }
+                    break;
+                case jet4_float_type_code:
+                    if (const auto* float_value = std::get_if<float>(&value)) {
+                        std::uint32_t bits = 0;
+                        std::memcpy(&bits, float_value, sizeof(bits));
+                        write_u32(row, value_offset, bits);
+                        value_encoded = true;
+                    }
+                    break;
+                case jet4_double_type_code:
+                    if (const auto* double_value = std::get_if<double>(&value)) {
+                        std::uint64_t bits = 0;
+                        std::memcpy(&bits, double_value, sizeof(bits));
+                        write_u64(row, value_offset, bits);
+                        value_encoded = true;
+                    }
+                    break;
+                default:
+                    break;
+            }
+            if (!value_encoded) {
+                invalid_column_value(file,
+                                     table,
+                                     column,
+                                     "Row value does not match its fixed numeric column type");
+            }
+        } else if (variable_type != nullptr) {
+            if (column.variable_table_index >= variable_values.size()) {
+                throw_table_error(DatabaseErrorCode::corrupted_file,
+                                  file,
+                                  table.name,
+                                  "Variable column index exceeds its table definition",
+                                  table.definition_page_number);
+            }
+            if (variable_type->public_type == DataType::text) {
+                const auto* text_value = std::get_if<std::string>(&value);
+                if (text_value == nullptr) {
+                    invalid_column_value(file, table, column, "Row value does not match its TEXT column type");
                 }
-                break;
-            case jet4_short_type_code:
-                if (const auto* short_value = std::get_if<std::int16_t>(&value)) {
-                    write_u16(row, value_offset, static_cast<std::uint16_t>(*short_value));
-                    value_encoded = true;
+                auto encoded = encode_utf8_text(file, table, column, *text_value);
+                if (encoded.size() > column.length) {
+                    invalid_column_value(file, table, column, "TEXT value exceeds the column's byte limit");
                 }
-                break;
-            case jet4_long_type_code:
-                if (const auto* long_value = std::get_if<std::int32_t>(&value)) {
-                    write_u32(row, value_offset, static_cast<std::uint32_t>(*long_value));
-                    value_encoded = true;
+                variable_values[column.variable_table_index] = std::move(encoded);
+            } else {
+                const auto* binary_value = std::get_if<BlobValue>(&value);
+                if (binary_value == nullptr) {
+                    invalid_column_value(file, table, column, "Row value does not match its BINARY column type");
                 }
-                break;
-            case jet4_float_type_code:
-                if (const auto* float_value = std::get_if<float>(&value)) {
-                    std::uint32_t bits = 0;
-                    std::memcpy(&bits, float_value, sizeof(bits));
-                    write_u32(row, value_offset, bits);
-                    value_encoded = true;
+                if (binary_value->bytes.size() > column.length) {
+                    invalid_column_value(file, table, column, "BINARY value exceeds the column's byte limit");
                 }
-                break;
-            case jet4_double_type_code:
-                if (const auto* double_value = std::get_if<double>(&value)) {
-                    std::uint64_t bits = 0;
-                    std::memcpy(&bits, double_value, sizeof(bits));
-                    write_u64(row, value_offset, bits);
-                    value_encoded = true;
-                }
-                break;
-            default:
-                break;
+                variable_values[column.variable_table_index] = binary_value->bytes;
+            }
+        } else {
+            invalid_column_value(file, table, column, "Row value uses an unsupported Jet4 column type");
         }
-        if (!value_encoded) {
-            DatabaseErrorContext context;
-            context.table_name = table.name;
-            context.column_number = column.column_number;
-            context.column_name = column.name;
-            throw DatabaseError(DatabaseErrorCode::unsupported_operation,
-                                "Row value does not match its fixed numeric column type",
-                                file.path(),
-                                table.definition_page_number,
-                                std::move(context));
-        }
-
-        const std::uint64_t null_mask_offset = row.size() - null_mask_size;
-        row[null_mask_offset + column.column_number / 8] |=
+        null_mask[column.column_number / 8] |=
             static_cast<std::uint8_t>(1u << (column.column_number % 8));
     }
+
+    if (!variable_columns.empty()) {
+        std::vector<std::uint16_t> variable_offsets(variable_columns.size());
+        for (std::size_t index = 0; index < variable_columns.size(); ++index) {
+            if (variable_columns[index] == nullptr) {
+                throw_table_error(DatabaseErrorCode::corrupted_file,
+                                  file,
+                                  table.name,
+                                  "Variable-column indexes are not contiguous",
+                                  table.definition_page_number);
+            }
+            if (row.size() > std::numeric_limits<std::uint16_t>::max()) {
+                unsupported_table_write(file, table.name, "Encoded row exceeds Jet4 variable-column offset limits");
+            }
+            variable_offsets[index] = static_cast<std::uint16_t>(row.size());
+            if (variable_values[index]) {
+                row.insert(row.end(), variable_values[index]->begin(), variable_values[index]->end());
+            }
+        }
+        if (row.size() > std::numeric_limits<std::uint16_t>::max()) {
+            unsupported_table_write(file, table.name, "Encoded row exceeds Jet4 variable-column offset limits");
+        }
+        append_u16(row, static_cast<std::uint16_t>(row.size()));
+        for (auto offset = variable_offsets.rbegin(); offset != variable_offsets.rend(); ++offset) {
+            append_u16(row, *offset);
+        }
+        append_u16(row, definition.variable_column_count);
+    }
+
+    row.insert(row.end(), null_mask.begin(), null_mask.end());
     return row;
 }
 
@@ -522,10 +722,18 @@ std::vector<RowId> append_jet4_rows(Jet4WriteContext& context,
         for (const auto& row : rows) {
             encoded_rows.push_back(encode_row(file, table, definition, row, fixed_data_size));
         }
-        const std::uint64_t row_size = encoded_rows.front().size();
-        if (row_size + 2 > file.format().page_size - data_page_row_directory_offset) {
-            unsupported_table_write(file, table.name, "Encoded row does not fit on a Jet4 data page");
+        const std::uint64_t maximum_row_size =
+            file.format().page_size - data_page_row_directory_offset - 2;
+        for (const auto& encoded_row : encoded_rows) {
+            if (encoded_row.size() > maximum_row_size) {
+                unsupported_table_write(file, table.name, "Encoded row does not fit on a Jet4 data page");
+            }
         }
+        const auto largest_row = std::max_element(encoded_rows.begin(), encoded_rows.end(), [](const auto& left,
+                                                                                              const auto& right) {
+            return left.size() < right.size();
+        });
+        const std::size_t largest_row_size = largest_row->size();
 
         const auto owned_page_list = read_usage_map_pages(file, definition.owned_pages);
         const auto free_page_list = read_usage_map_pages(file, definition.free_space_pages);
@@ -548,7 +756,7 @@ std::vector<RowId> append_jet4_rows(Jet4WriteContext& context,
             }
             auto page = file.read_page(page_number);
             validate_data_page(file, table.name, page_number, table.definition_page_number, page);
-            if (!row_fits_on_data_page(file, table.name, page, row_size)) {
+            if (!row_fits_on_data_page(file, table.name, page, largest_row_size)) {
                 free_pages.erase(page_number);
                 removed_free_pages.insert(page_number);
                 continue;
@@ -736,7 +944,7 @@ void update_jet4_row(Jet4WriteContext& context,
                             file,
                             table.name,
                             row_id,
-                            "In-place row update requires an unchanged fixed-width row size");
+                            "In-place row update requires an unchanged encoded row size");
         }
         TableRowReader row_reader(file, table.name, definition);
         (void)row_reader.read_at(row_id.page_number, row_id.row_number);

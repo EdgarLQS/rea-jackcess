@@ -22,7 +22,7 @@ P0 放行前仍需补齐每项的适用格式、读/建/改/拒绝结果、具�
 | 打开、创建与生命周期 | `DatabaseBuilder`、`Database`、`Database.FileFormat` | 既有库打开/只读模式；Jet/ACE 版本选择和新建；刷新、关闭、自动同步；密码、文件通道、字符集、时区、日期类型及打开选项 | `BuilderTest`、`DatabaseTest`、`DatabaseReadWriteTest`、`LocalDateTimeTest` | **部分实现**：Jet4 只读/显式读写打开；读写句柄排他 advisory 锁；官方模板可创建 V2000/V2003 空库；配置信息与跨格式行为未实现。 |
 | 格式识别、编码和 codec | `Database.FileFormat`、`DataType`、`CodecProvider`、`CodecHandler` | Jet3、Generic Jet4、V2000/V2003、各 ACE 版本、MSISAM、有编码页的识别和逐操作拒绝；codec 调用顺序、部分页编码和错误传播 | `JetFormatTest`、`CodecHandlerTest`、`DatabaseTest` | **部分实现**：Jet/ACE 头识别；行读取目前限 Jet4。各引擎版本行为、MSISAM 和 codec 扩展未实现或未验证。 |
 | 数据库目录与库级元数据 | `Database`、`TableMetaData`、`PropertyMap`、`Relationship`、`query.Query` | 枚举系统/用户/隐藏/链接表、库属性、关系、已保存查询、linked database 与 resolver；对象名称、类型和错误语义 | `DatabaseTest`、`PropertiesTest`、`PropertyMapsTest`、`RelationshipTest`、`LinkedTableTest`、`QueryTest` | **部分实现**：Jet4 系统目录与普通本地表发现、部分属性/索引定义读取。库属性、关系、查询定义、链接表和完整对象分类未实现。 |
-| 表、列和结构构建 | `Table`、`TableDefinition`、`Column`、`TableBuilder`、`ColumnBuilder` | schema/属性/创建时间；列类型、大小、精度、可空性、默认值、自动编号、计算列、超链接、多值和版本列；建表、加列和名称转义/拒绝 | `TableTest`、`ColumnBuilderTest`、`BuilderTest`、`TableUpdaterTest`、`CalcFieldTest` | **部分实现**：Jet4 普通本地表 schema、列 `Required` 推导可空性、逻辑/物理索引定义读取；V2000 空库可创建 BYTE/SHORT/LONG/SINGLE/DOUBLE 列空表；其他字段属性和表结构修改未实现。定长数值行追加/更新及删除仍限无索引本地 Jet4 子集。 |
+| 表、列和结构构建 | `Table`、`TableDefinition`、`Column`、`TableBuilder`、`ColumnBuilder` | schema/属性/创建时间；列类型、大小、精度、可空性、默认值、自动编号、计算列、超链接、多值和版本列；建表、加列和名称转义/拒绝 | `TableTest`、`ColumnBuilderTest`、`BuilderTest`、`TableUpdaterTest`、`CalcFieldTest` | **部分实现**：Jet4 普通本地表 schema、列 `Required` 推导可空性、逻辑/物理索引定义读取；V2000 空库可创建 BYTE/SHORT/LONG/SINGLE/DOUBLE/TEXT/BINARY 列空表；其他字段属性和表结构修改未实现。仅 Jet4 V2000 无索引本地表可追加这些类型，且在编码行长不变时原位更新；行删除可用。V2003 或未知 `AccessVersion` 写入会拒绝。 |
 | 行值和 RowId | `Row`、`RowId`、`DataType` | 类型化值和 NULL；各类型便捷取值；字段名匹配；行 ID 相等/排序；复杂值与字节载荷的资源生命周期 | `TableTest`、`BigIntTest`、`ExtendedDateTest`、`LongValueTest`、`ComplexColumnTest` | **部分实现**：Jet4 基础标量、日期、GUID、文本、Binary、Memo/OLE 原始字节；`Row::id()` 暴露页/行位置。Java 各便捷转换、完整复杂类型和边界错误仍待补齐。 |
 | 表扫描、游标和过滤 | `Cursor`、`CursorBuilder`、`util.RowFilter`、`util.TableIterableBuilder` | 前后移动、定位 RowId、保存/恢复位置、列投影、查找/匹配、更新/删除当前行、过滤与单次/重复迭代语义 | `CursorTest`、`CursorBuilderTest`、`RowFilterTest`、`TableTest` | **部分实现**：只读单遍 `rows()`；游标导航、定位、投影、过滤和修改未实现。 |
 | 索引定义、查询和维护 | `Index`、`IndexBuilder`、`IndexCursor`、`CursorBuilder` | 唯一/必需/忽略 NULL、复合键和升降序；键编码、排序规则、精确/最近查找、范围端点；页分裂、删除、重开后的可达性 | `IndexTest`、`BigIndexTest`、`IndexLevelTest`、`IndexCodesTest`、`CursorBuilderTest` | **部分实现**：Jet4 索引定义及叶链顺序扫描；一个 MDB 样本中 138 个用户逻辑索引的完整 RowId 序列与 Jackcess 5.2.0 一致。键语义、点/范围查询、其他排序规则及写维护未实现；样本结果不等于验收。 |
@@ -42,7 +42,7 @@ P0 放行前仍需补齐每项的适用格式、读/建/改/拒绝结果、具�
 |---|---|---|---|---|
 | Jet3 V1997 | 待从 5.2.0 源码和用例逐项核对 | 计划为拒绝，需固定拒绝 API、错误和文件状态 | 计划只读，需验证每类修改入口拒绝 | 待建负例与原文件哈希断言 |
 | Generic Jet4 | 待核实 | 计划为拒绝 | 计划支持，需区分允许的改动 | 待从对应 fixture/test 映射 |
-| Jet4 V2000/V2003 | V2000 有限样本试验，其他行为待矩阵 | **部分实现**：可新建空 V2000/V2003 库；仅 V2000 支持创建 BYTE/SHORT/LONG/SINGLE/DOUBLE 列空表 | **部分实现**：V2000 无索引本地表支持这些定长数值类型的追加/等长更新及行删除；其他类型、索引维护和迁移未实现 | 部分验证；格式读写矩阵与已有库修改未验收 |
+| Jet4 V2000/V2003 | V2000 有限样本试验，其他行为待矩阵 | **部分实现**：可新建空 V2000/V2003 库；仅 V2000 支持创建 BYTE/SHORT/LONG/SINGLE/DOUBLE/TEXT/BINARY 列空表 | **部分实现**：V2000 无索引本地表支持定长数值与 TEXT/BINARY 追加、编码后等长更新及行删除；其他类型、行迁移和索引维护未实现 | 部分验证；格式读写矩阵与已有库修改未验收 |
 | ACE V2007/V2010/V2016/V2019 | 头识别已实现；schema/值/复杂列逐版待核实 | 未实现 | 未实现 | 未完成 |
 | MSISAM/有编码 Jet/ACE | 头/编码识别和拒绝边界待核实 | 待核实 | codec 接口和默认拒绝待核实 | 待补独立样本与自定义 codec 用例 |
 
@@ -53,7 +53,7 @@ P0 放行前仍需补齐每项的适用格式、读/建/改/拒绝结果、具�
 | 难点 | 现有证据 | 尚缺验证 | 状态 |
 |---|---|---|---|
 | 索引排序键、复合键、分裂与查询顺序 | 仓库 `tools/validation/` 在固定 Jet4 样本上比较 138 个用户索引的完整 RowId 序列，结果一致；已有合成多层 B-tree/叶链测试 | 多格式排序规则、升降序/NULL/重复键/长文本、页分裂/删除、精确查找和范围边界 | 部分试验；不能放行索引能力 |
-| 已有库更新、迁移行和长值变更 | 有限 C++ writer 支持无索引本地 Jet4 的 BYTE/SHORT/LONG/SINGLE/DOUBLE 定长行追加、等长更新和删除 | 在副本上覆盖普通/溢出行更新、行迁移、长值链更新、索引键变化、索引表删除、失败后的文件状态，并由 Java 回读 | 部分实现；难点验证未完成 |
+| 已有库更新、迁移行和长值变更 | 有限 C++ writer 支持 Jet4 V2000 无索引本地表的 BYTE/SHORT/LONG/SINGLE/DOUBLE/TEXT/BINARY 行追加、编码后等长更新和删除；批次中的每行会先检查单页容量 | 在副本上覆盖 V2003 写入拒绝、行长变化导致的迁移、长值链更新、索引键变化、索引表删除、失败后的文件状态，并由 Java 回读 | 部分实现；难点验证未完成 |
 | ACE 附件、多值、版本历史等复杂列 | 尚无 C++ 解码/写入实现 | 按 ACE 版本取得样本，追踪关联表/属性/删除行为，建立 GDAL/Jackcess 对照 | 未开始 |
 | 原生目标与估算 | 当前仓库有本机 CMake/CTest 结果；计划存有旧的总体估算范围 | 原生 Linux x86_64/ARM64 环境、Access/ArcGIS 目标版本、性能门槛、逐包工量和关键路径 | 未核实；旧总体估算不作为本版分包估算 |
 

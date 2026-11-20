@@ -1,6 +1,7 @@
 #include "jet4_table_creator.hpp"
 #include "jet4_fixed_numeric.hpp"
 #include "jet4_global_usage_map.hpp"
+#include "jet4_variable_type.hpp"
 
 #include "../util/little_endian.hpp"
 #include "../catalog/row_reader.hpp"
@@ -134,9 +135,9 @@ void validate_table_builder(const std::filesystem::path& path, const TableBuilde
         validate_name(path,
                       column.name(),
                       "Column names currently support 1-64 ASCII letters, digits, spaces, and underscores");
-        if (jet4_fixed_numeric_type(column.type()) == nullptr) {
+        if (jet4_fixed_numeric_type(column.type()) == nullptr && jet4_variable_type(column.type()) == nullptr) {
             unsupported_operation(path,
-                                 "Initial Jet4 table creation currently supports BYTE, SHORT, LONG, SINGLE, and DOUBLE columns only");
+                                 "Initial Jet4 table creation currently supports BYTE, SHORT, LONG, SINGLE, DOUBLE, TEXT, and BINARY columns only");
         }
         if (std::any_of(names.begin(), names.end(), [&](std::string_view previous) {
                 return equals_ascii_case_insensitive(previous, column.name());
@@ -539,7 +540,11 @@ std::vector<std::uint8_t> build_table_definition_page(const std::filesystem::pat
     page[24] = 0x01;
     page[40] = user_table_type;
     write_u16(page, 41, static_cast<std::uint16_t>(table.columns().size()));
-    write_u16(page, 43, 0);
+    const std::uint16_t variable_column_count = static_cast<std::uint16_t>(std::count_if(
+        table.columns().begin(), table.columns().end(), [](const ColumnBuilder& column) {
+            return jet4_variable_type(column.type()) != nullptr;
+        }));
+    write_u16(page, 43, variable_column_count);
     write_u16(page, 45, static_cast<std::uint16_t>(table.columns().size()));
     write_u32(page, 47, 0);
     write_u32(page, 51, 0);
@@ -550,26 +555,38 @@ std::vector<std::uint8_t> build_table_definition_page(const std::filesystem::pat
 
     std::uint64_t column_offset = table_definition_header_size;
     std::uint64_t fixed_data_offset = 0;
+    std::uint16_t variable_table_index = 0;
     for (std::size_t index = 0; index < table.columns().size(); ++index) {
         const auto& column = table.columns()[index];
         const auto* storage = jet4_fixed_numeric_type(column.type());
-        if (storage == nullptr || fixed_data_offset > std::numeric_limits<std::uint16_t>::max()) {
-            unsupported_operation(path, "Jet4 table has an unsupported fixed-width column layout");
+        const auto* variable_storage = jet4_variable_type(column.type());
+        if ((storage == nullptr) == (variable_storage == nullptr)) {
+            unsupported_operation(path, "Jet4 table has an unsupported column storage layout");
         }
-        page[column_offset] = storage->jet_type_code;
+        if (fixed_data_offset > std::numeric_limits<std::uint16_t>::max()) {
+            unsupported_operation(path, "Jet4 table fixed data layout exceeds the format limit");
+        }
+        page[column_offset] = storage != nullptr ? storage->jet_type_code : variable_storage->jet_type_code;
         write_u32(page, column_offset + 1, table_definition_magic);
         write_u16(page, column_offset + 5, static_cast<std::uint16_t>(index));
-        write_u16(page, column_offset + 7, 0);
+        write_u16(page,
+                  column_offset + 7,
+                  storage != nullptr ? 0 : variable_table_index++);
         write_u16(page, column_offset + 9, static_cast<std::uint16_t>(index));
         page[column_offset + 11] = 0;
         page[column_offset + 12] = 0;
         write_u16(page, column_offset + 13, 0);
-        page[column_offset + 15] = 0x03;
+        page[column_offset + 15] = storage != nullptr ? 0x03 : 0x02;
         page[column_offset + 16] = 0;
         write_u32(page, column_offset + 17, 0);
-        write_u16(page, column_offset + 21, static_cast<std::uint16_t>(fixed_data_offset));
-        write_u16(page, column_offset + 23, storage->byte_size);
-        fixed_data_offset += storage->byte_size;
+        write_u16(page,
+                  column_offset + 21,
+                  storage != nullptr ? static_cast<std::uint16_t>(fixed_data_offset) : 0);
+        const std::uint16_t column_size = storage != nullptr ? storage->byte_size : variable_storage->maximum_byte_size;
+        write_u16(page, column_offset + 23, column_size);
+        if (storage != nullptr) {
+            fixed_data_offset += storage->byte_size;
+        }
         column_offset += column_definition_size;
     }
 

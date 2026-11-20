@@ -36,6 +36,7 @@ struct UnsupportedValue {
     std::string description;
 };
 
+// Jet4 TEXT values use UTF-8 std::string values; BINARY values use BlobValue.
 using Value = std::variant<std::monostate,
                            bool,
                            std::int8_t,

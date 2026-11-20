@@ -89,6 +89,35 @@ void mutate_table_definition_u16(const std::filesystem::path& path,
     check(static_cast<bool>(output), "failed to write a mutated table definition fixture");
 }
 
+void mutate_unique_utf16le_string(const std::filesystem::path& path,
+                                  const std::string& previous,
+                                  const std::string& replacement) {
+    check(previous.size() == replacement.size(), "test UTF-16LE strings must have equal lengths");
+    auto bytes = read_bytes(path);
+    std::vector<std::uint8_t> encoded_previous;
+    std::vector<std::uint8_t> encoded_replacement;
+    for (const char value : previous) {
+        encoded_previous.push_back(static_cast<std::uint8_t>(value));
+        encoded_previous.push_back(0);
+    }
+    for (const char value : replacement) {
+        encoded_replacement.push_back(static_cast<std::uint8_t>(value));
+        encoded_replacement.push_back(0);
+    }
+
+    const auto match = std::search(bytes.begin(), bytes.end(), encoded_previous.begin(), encoded_previous.end());
+    check(match != bytes.end(), "test fixture did not contain the expected UTF-16LE string");
+    check(std::search(std::next(match), bytes.end(), encoded_previous.begin(), encoded_previous.end()) == bytes.end(),
+          "test fixture contained more than one matching UTF-16LE string");
+    std::copy(encoded_replacement.begin(), encoded_replacement.end(), match);
+
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    check(static_cast<bool>(output), "failed to open a test database for UTF-16LE string mutation");
+    output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    output.flush();
+    check(static_cast<bool>(output), "failed to write a mutated UTF-16LE string fixture");
+}
+
 void check_empty_database(const std::filesystem::path& path,
                           rea_jackcess::DatabaseFormat database_format,
                           std::uint64_t expected_page_count) {
@@ -488,6 +517,246 @@ void test_add_rows_with_fixed_numeric_types(const TemporaryDirectory& directory)
           "numeric table reopen did not preserve boundary and updated rows");
 }
 
+void test_add_rows_with_text_and_binary_columns(const TemporaryDirectory& directory) {
+    const auto path = directory.file("variable-rows.mdb");
+    rea_jackcess::TableBuilder table_builder("Variable");
+    table_builder.add_column("Id", rea_jackcess::DataType::int32)
+        .add_column("Name", rea_jackcess::DataType::text)
+        .add_column("Payload", rea_jackcess::DataType::binary)
+        .add_column("Note", rea_jackcess::DataType::text);
+
+    {
+        const auto created = rea_jackcess::Database::create(
+            path,
+            rea_jackcess::DatabaseFormat::v2000,
+            std::vector<rea_jackcess::TableBuilder>{table_builder});
+        const auto tables = created.tables();
+        const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "Variable";
+        });
+        check(table != tables.end() && table->columns().size() == 4,
+              "new variable table did not preserve all columns");
+        check(table->columns()[0].type == rea_jackcess::DataType::int32 &&
+                  table->columns()[1].type == rea_jackcess::DataType::text &&
+                  table->columns()[2].type == rea_jackcess::DataType::binary &&
+                  table->columns()[3].type == rea_jackcess::DataType::text &&
+                  table->columns()[0].fixed && !table->columns()[1].fixed &&
+                  !table->columns()[2].fixed && !table->columns()[3].fixed &&
+                  table->columns()[1].size == 510 && table->columns()[2].size == 255 &&
+                  table->columns()[3].size == 510,
+              "new variable table did not preserve fixed and variable column layouts");
+        check(!table->rows().next(), "new variable table unexpectedly contains rows");
+    }
+
+    rea_jackcess::RowId updated_row_id{};
+    {
+        auto writable = rea_jackcess::Database::open(path, rea_jackcess::DatabaseOpenMode::read_write);
+        auto tables = writable.tables();
+        const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "Variable";
+        });
+        check(table != tables.end(), "read-write database did not expose variable table");
+        const auto row_ids = table->add_rows({
+            {std::int32_t{1}, std::string("A"), rea_jackcess::BlobValue{{0, 0x7f, 0xff}}, std::string("🔥")},
+            {std::int32_t{2}, std::string{}, rea_jackcess::BlobValue{}, std::monostate{}},
+            {std::int32_t{3}, std::monostate{}, rea_jackcess::BlobValue{{0x80}}, std::string("雪")},
+            {std::int32_t{4}, std::string(255, 'x'),
+             rea_jackcess::BlobValue{std::vector<std::uint8_t>(255, 0xa5)}, std::string(255, 'y')},
+        });
+        check(row_ids.size() == 4 && table->row_count_header() == 4,
+              "variable batch insertion did not preserve RowIds or row count");
+        updated_row_id = row_ids[0];
+
+        auto rows = table->rows();
+        const auto first = rows.next();
+        const auto second = rows.next();
+        const auto third = rows.next();
+        const auto boundary = rows.next();
+        check(first && std::get<std::int32_t>(first->at(0)) == 1 &&
+                  std::get<std::string>(first->at(1)) == "A" &&
+                  std::get<rea_jackcess::BlobValue>(first->at(2)).bytes ==
+                      std::vector<std::uint8_t>({0, 0x7f, 0xff}) &&
+                  std::get<std::string>(first->at(3)) == "🔥",
+              "variable row encoding did not preserve text, Unicode, and binary values");
+        check(second && std::get<std::string>(second->at(1)).empty() &&
+                  std::get<rea_jackcess::BlobValue>(second->at(2)).bytes.empty() &&
+                  std::holds_alternative<std::monostate>(second->at(3)),
+              "empty TEXT/BINARY values were confused with NULL");
+        check(third && std::holds_alternative<std::monostate>(third->at(1)) &&
+                  std::get<rea_jackcess::BlobValue>(third->at(2)).bytes ==
+                      std::vector<std::uint8_t>({0x80}) &&
+                  std::get<std::string>(third->at(3)) == "雪",
+              "variable column offsets did not preserve NULL and following values");
+        check(boundary && std::get<std::int32_t>(boundary->at(0)) == 4 &&
+                  std::get<std::string>(boundary->at(1)) == std::string(255, 'x') &&
+                  std::get<rea_jackcess::BlobValue>(boundary->at(2)).bytes ==
+                      std::vector<std::uint8_t>(255, 0xa5) &&
+                  std::get<std::string>(boundary->at(3)) == std::string(255, 'y') && !rows.next(),
+              "maximum TEXT/BINARY column lengths were not preserved");
+
+        const auto before_invalid_write = read_bytes(path);
+        expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+            (void)table->add_row({std::int32_t{4}, rea_jackcess::BlobValue{},
+                                  rea_jackcess::BlobValue{}, std::string("x")});
+        });
+        check(read_bytes(path) == before_invalid_write,
+              "a mismatched variable value modified the file before validation failed");
+        expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+            (void)table->add_row({std::int32_t{4}, std::string("\xc0\xaf"),
+                                  rea_jackcess::BlobValue{}, std::string("x")});
+        });
+        check(read_bytes(path) == before_invalid_write,
+              "invalid UTF-8 modified the file before validation failed");
+        expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+            (void)table->add_row({std::int32_t{4}, std::string(256, 'x'),
+                                  rea_jackcess::BlobValue{}, std::string("x")});
+        });
+        check(read_bytes(path) == before_invalid_write,
+              "oversized TEXT modified the file before validation failed");
+        expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+            (void)table->add_row({std::int32_t{4}, std::string("x"),
+                                  rea_jackcess::BlobValue{std::vector<std::uint8_t>(256, 0)}, std::string("x")});
+        });
+        check(read_bytes(path) == before_invalid_write,
+              "oversized BINARY modified the file before validation failed");
+
+        table->update_row(row_ids[0],
+                          {std::int32_t{10}, std::string("B"),
+                           rea_jackcess::BlobValue{{1, 2, 3}}, std::string("🚀")});
+        check(table->row_count_header() == 4,
+              "same-size variable row update changed the row count");
+        const auto before_size_change = read_bytes(path);
+        expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+            table->update_row(row_ids[0],
+                              {std::int32_t{10}, std::string("longer"),
+                               rea_jackcess::BlobValue{{1, 2, 3}}, std::string("🚀")});
+        });
+        check(read_bytes(path) == before_size_change,
+              "different-size variable update modified the row before rejection");
+
+        auto updated_rows = table->rows();
+        const auto updated = updated_rows.next();
+        check(updated && updated->id() == row_ids[0] && std::get<std::int32_t>(updated->at(0)) == 10 &&
+                  std::get<std::string>(updated->at(1)) == "B" &&
+                  std::get<rea_jackcess::BlobValue>(updated->at(2)).bytes ==
+                      std::vector<std::uint8_t>({1, 2, 3}) &&
+                  std::get<std::string>(updated->at(3)) == "🚀",
+              "same-size variable row update changed the wrong values or RowId");
+    }
+
+    const auto reopened = rea_jackcess::Database::open(path);
+    const auto tables = reopened.tables();
+    const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+        return candidate.name() == "Variable";
+    });
+    check(table != tables.end() && table->row_count_header() == 4,
+          "variable table reopen did not preserve its row count");
+    auto rows = table->rows();
+    const auto updated = rows.next();
+    check(updated && updated->id() == updated_row_id && std::get<std::int32_t>(updated->at(0)) == 10 &&
+              std::get<std::string>(updated->at(1)) == "B" &&
+              std::get<rea_jackcess::BlobValue>(updated->at(2)).bytes ==
+                  std::vector<std::uint8_t>({1, 2, 3}) &&
+              std::get<std::string>(updated->at(3)) == "🚀",
+          "read-only reopen did not preserve updated variable values and RowId");
+    const auto empty_values = rows.next();
+    const auto third = rows.next();
+    check(empty_values && std::get<std::string>(empty_values->at(1)).empty() &&
+              std::get<rea_jackcess::BlobValue>(empty_values->at(2)).bytes.empty() &&
+              std::holds_alternative<std::monostate>(empty_values->at(3)) &&
+              third && std::holds_alternative<std::monostate>(third->at(1)) &&
+              std::get<rea_jackcess::BlobValue>(third->at(2)).bytes == std::vector<std::uint8_t>({0x80}) &&
+              std::get<std::string>(third->at(3)) == "雪",
+          "read-only reopen changed empty, NULL, or following variable values");
+    const auto boundary = rows.next();
+    check(boundary && std::get<std::string>(boundary->at(1)) == std::string(255, 'x') &&
+              std::get<rea_jackcess::BlobValue>(boundary->at(2)).bytes ==
+                  std::vector<std::uint8_t>(255, 0xa5) &&
+              std::get<std::string>(boundary->at(3)) == std::string(255, 'y') && !rows.next(),
+          "read-only reopen changed maximum TEXT/BINARY values");
+}
+
+void test_later_oversized_batch_row_is_rejected(const TemporaryDirectory& directory) {
+    const auto path = directory.file("oversized-batch-row.mdb");
+    rea_jackcess::TableBuilder table_builder("LargeRows");
+    table_builder.add_column("Id", rea_jackcess::DataType::int32);
+    for (int index = 0; index < 8; ++index) {
+        table_builder.add_column("Text" + std::to_string(index), rea_jackcess::DataType::text);
+    }
+    {
+        const auto created = rea_jackcess::Database::create(
+            path,
+            rea_jackcess::DatabaseFormat::v2000,
+            std::vector<rea_jackcess::TableBuilder>{table_builder});
+        (void)created;
+    }
+
+    const auto before_write = read_bytes(path);
+    auto writable = rea_jackcess::Database::open(path, rea_jackcess::DatabaseOpenMode::read_write);
+    auto tables = writable.tables();
+    const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+        return candidate.name() == "LargeRows";
+    });
+    check(table != tables.end(), "read-write database did not expose the oversized-row fixture");
+
+    std::vector<rea_jackcess::Value> first_row{std::int32_t{1}};
+    std::vector<rea_jackcess::Value> oversized_row{std::int32_t{2}};
+    for (int index = 0; index < 8; ++index) {
+        first_row.emplace_back(std::monostate{});
+        oversized_row.emplace_back(std::string(255, 'x'));
+    }
+    expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+        (void)table->add_rows({first_row, oversized_row});
+    });
+    check(read_bytes(path) == before_write,
+          "a later oversized row in a batch modified the database before rejection");
+}
+
+void test_v2003_row_writes_are_rejected(const TemporaryDirectory& directory) {
+    const std::vector<std::pair<std::string, std::string>> access_versions{
+        {"v2003-row-write.mdb", "09.50"},
+        {"unknown-access-version-row-write.mdb", "99.99"},
+        {"missing-access-version-row-write.mdb", ""},
+    };
+    for (const auto& [filename, access_version] : access_versions) {
+        const auto path = directory.file(filename);
+        rea_jackcess::TableBuilder table_builder("T");
+        table_builder.add_column("Id", rea_jackcess::DataType::int32);
+        {
+            const auto created = rea_jackcess::Database::create(
+                path,
+                rea_jackcess::DatabaseFormat::v2000,
+                std::vector<rea_jackcess::TableBuilder>{table_builder});
+            (void)created;
+        }
+        // Jackcess identifies Jet4 variants through the database AccessVersion property.
+        if (access_version.empty()) {
+            mutate_unique_utf16le_string(path, "AccessVersion", "UnknownVersnX");
+        } else {
+            mutate_unique_utf16le_string(path, "08.50", access_version);
+        }
+        const auto before_write = read_bytes(path);
+
+        auto writable = rea_jackcess::Database::open(path, rea_jackcess::DatabaseOpenMode::read_write);
+        auto tables = writable.tables();
+        const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "T";
+        });
+        check(table != tables.end(), "read-write database did not expose the format marker fixture");
+        expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+            (void)table->add_row({std::int32_t{1}});
+        });
+        expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+            table->update_row({26, 0}, {std::int32_t{1}});
+        });
+        expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+            table->delete_row({26, 0});
+        });
+        check(read_bytes(path) == before_write,
+              "non-V2000 Jet4 row operations modified the database before rejection");
+    }
+}
+
 void test_row_writer_rejects_unsupported_column_layouts(const TemporaryDirectory& directory) {
     constexpr std::uint64_t variable_column_count_offset = 43;
     constexpr std::uint64_t second_column_fixed_offset_location = 63 + 25 + 21;
@@ -644,7 +913,7 @@ void test_unsupported_table_schema_preserves_destination(const TemporaryDirector
     const auto original_bytes = read_bytes(path);
 
     rea_jackcess::TableBuilder unsupported_table("Unsupported");
-    unsupported_table.add_column("Name", rea_jackcess::DataType::text);
+    unsupported_table.add_column("Content", rea_jackcess::DataType::memo);
     expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
         auto database = rea_jackcess::Database::create(
             path,
@@ -721,6 +990,9 @@ int main() {
         test_create_empty_tables(directory);
         test_add_rows_to_unindexed_long_table(directory);
         test_add_rows_with_fixed_numeric_types(directory);
+        test_add_rows_with_text_and_binary_columns(directory);
+        test_later_oversized_batch_row_is_rejected(directory);
+        test_v2003_row_writes_are_rejected(directory);
         test_row_writer_rejects_unsupported_column_layouts(directory);
         test_delete_rows_from_unindexed_table(directory);
         test_unsupported_table_schema_preserves_destination(directory);

@@ -203,7 +203,8 @@ std::optional<std::vector<std::uint8_t>> read_property_bytes(const PageFile& fil
 }
 
 std::vector<SystemCatalogObject> read_system_catalog_objects(const PageFile& file,
-                                                              const TableDefinition& definition) {
+                                                              const TableDefinition& definition,
+                                                              std::optional<std::string_view> property_object_name) {
     if (file.format().version != EngineVersion::jet4) {
         throw DatabaseError(DatabaseErrorCode::unsupported_version,
                             "Jet4 system catalog layout requested for a different engine version",
@@ -232,7 +233,10 @@ std::vector<SystemCatalogObject> read_system_catalog_objects(const PageFile& fil
         object.page_number = row.page_number;
         object.row_number = row.row_number;
         object.property_column_present = properties_column != nullptr;
-        if (properties_column != nullptr) {
+        const bool read_properties = properties_column != nullptr &&
+                                     (!property_object_name ||
+                                      (object.name && equals_ignore_case(*object.name, *property_object_name)));
+        if (read_properties) {
             try {
                 object.property_bytes = read_property_bytes(file, row, *properties_column);
             } catch (const DatabaseError& error) {

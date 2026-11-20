@@ -85,6 +85,33 @@ std::vector<std::uint8_t> utf16le(const std::u16string& text) {
     return bytes;
 }
 
+void append_text_property_map(std::vector<std::uint8_t>& bytes,
+                              std::uint16_t map_type,
+                              const std::u16string& map_name,
+                              const std::string& value) {
+    const std::size_t block_start = bytes.size();
+    append_u32(bytes, 0);
+    append_u16(bytes, map_type);
+
+    const std::size_t map_name_start = bytes.size();
+    append_u32(bytes, 0);
+    const auto encoded_map_name = utf16le(map_name);
+    append_u16(bytes, static_cast<std::uint16_t>(encoded_map_name.size()));
+    bytes.insert(bytes.end(), encoded_map_name.begin(), encoded_map_name.end());
+    write_u32(bytes,
+              map_name_start,
+              static_cast<std::uint32_t>(bytes.size() - map_name_start));
+
+    const auto encoded_value = utf16le(std::u16string(value.begin(), value.end()));
+    append_u16(bytes, static_cast<std::uint16_t>(8 + encoded_value.size()));
+    bytes.push_back(0);
+    bytes.push_back(0x0a);
+    append_u16(bytes, 0);
+    append_u16(bytes, static_cast<std::uint16_t>(encoded_value.size()));
+    bytes.insert(bytes.end(), encoded_value.begin(), encoded_value.end());
+    write_u32(bytes, block_start, static_cast<std::uint32_t>(bytes.size() - block_start));
+}
+
 struct TestColumn {
     std::u16string name;
     std::uint8_t type;
@@ -576,6 +603,43 @@ void test_column_property_map_nullability() {
     std::filesystem::remove(path, ignored);
 }
 
+void test_text_property_reads_only_the_default_map() {
+    const auto path = make_database_fixture();
+    try {
+        const auto file = rea_jackcess::detail::PageFile::open(path);
+        std::vector<std::uint8_t> property_bytes{'M', 'R', '2', 0};
+
+        const std::size_t names_block = property_bytes.size();
+        append_u32(property_bytes, 0);
+        append_u16(property_bytes, 0x80);
+        const auto property_name = utf16le(u"AccessVersion");
+        append_u16(property_bytes, static_cast<std::uint16_t>(property_name.size()));
+        property_bytes.insert(property_bytes.end(), property_name.begin(), property_name.end());
+        write_u32(property_bytes,
+                  names_block,
+                  static_cast<std::uint32_t>(property_bytes.size() - names_block));
+
+        append_text_property_map(property_bytes, 0, u"NamedMap", "08.50");
+        append_text_property_map(property_bytes, 2, u"", "08.50");
+        const auto missing_default = rea_jackcess::detail::read_text_property(
+            file, "MSysDb", 7, 3, property_bytes, "AccessVersion");
+        check(!missing_default,
+              "AccessVersion from a named or non-default property map was accepted");
+
+        append_text_property_map(property_bytes, 0, u"", "09.50");
+        const auto default_value = rea_jackcess::detail::read_text_property(
+            file, "MSysDb", 7, 3, property_bytes, "AccessVersion");
+        check(default_value == std::optional<std::string>("09.50"),
+              "AccessVersion was not read from the unnamed type-zero property map");
+    } catch (...) {
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+        throw;
+    }
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+}
+
 void test_table_context_is_preserved_for_usage_map_errors() {
     const auto path = make_database_fixture();
     try {
@@ -768,6 +832,7 @@ int main() {
         test_usage_map_and_system_catalog();
         test_table_schema_catalog();
         test_column_property_map_nullability();
+        test_text_property_reads_only_the_default_map();
         test_table_context_is_preserved_for_usage_map_errors();
         test_public_database_table_and_row_cursor();
         test_public_index_row_cursor();

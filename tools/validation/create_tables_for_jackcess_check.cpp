@@ -15,10 +15,11 @@ int main(int argc, char** argv) {
     const bool update_row = argc == 3 && std::string(argv[2]) == "--update-row";
     const bool delete_row = argc == 3 && std::string(argv[2]) == "--delete-row";
     const bool fixed_numeric_rows = argc == 3 && std::string(argv[2]) == "--fixed-numeric-rows";
-    const bool writes_rows = batch_rows || update_row || delete_row || fixed_numeric_rows;
+    const bool variable_rows = argc == 3 && std::string(argv[2]) == "--variable-rows";
+    const bool writes_rows = batch_rows || update_row || delete_row || fixed_numeric_rows || variable_rows;
     if (argc != 2 && !single_table && !maximum_definition && !writes_rows) {
         std::cerr << "Usage: create_tables_for_jackcess_check <database.mdb> "
-                     "[--single|--maximum-definition|--batch-rows|--update-row|--delete-row|--fixed-numeric-rows]\n";
+                     "[--single|--maximum-definition|--batch-rows|--update-row|--delete-row|--fixed-numeric-rows|--variable-rows]\n";
         return 2;
     }
 
@@ -41,8 +42,15 @@ int main(int argc, char** argv) {
             .add_column("SingleValue", rea_jackcess::DataType::float32)
             .add_column("DoubleValue", rea_jackcess::DataType::float64);
 
+        rea_jackcess::TableBuilder variable_table("Variable");
+        variable_table.add_column("Id", rea_jackcess::DataType::int32)
+            .add_column("Name", rea_jackcess::DataType::text)
+            .add_column("Payload", rea_jackcess::DataType::binary)
+            .add_column("Note", rea_jackcess::DataType::text);
+
         std::vector<rea_jackcess::TableBuilder> tables{
-            fixed_numeric_rows ? fixed_numeric_table : (writes_rows ? batch_table : first_table)};
+            variable_rows ? variable_table
+                          : (fixed_numeric_rows ? fixed_numeric_table : (writes_rows ? batch_table : first_table))};
         if (!single_table) {
             if (maximum_definition) {
                 rea_jackcess::TableBuilder large_table("Large");
@@ -71,14 +79,26 @@ int main(int argc, char** argv) {
                 argv[1], rea_jackcess::DatabaseOpenMode::read_write);
             auto tables_after_open = database.tables();
             const auto table = std::find_if(tables_after_open.begin(), tables_after_open.end(),
-                                            [](const auto& candidate) {
-                                                return candidate.name() == "T";
+                                            [&](const auto& candidate) {
+                                                return candidate.name() == (variable_rows ? "Variable" : "T");
                                             });
             if (table == tables_after_open.end()) {
-                throw std::runtime_error("Read-write reopen did not discover table T");
+                throw std::runtime_error("Read-write reopen did not discover the expected table");
             }
 
-            if (fixed_numeric_rows) {
+            if (variable_rows) {
+                const auto row_ids = table->add_rows({
+                    {std::int32_t{1}, std::string("A"), rea_jackcess::BlobValue{{0, 0x7f, 0xff}}, std::string("🔥")},
+                    {std::int32_t{2}, std::string{}, rea_jackcess::BlobValue{}, std::monostate{}},
+                    {std::int32_t{3}, std::monostate{}, rea_jackcess::BlobValue{{0x80}}, std::string("雪")},
+                    {std::int32_t{4}, std::string(255, 'x'),
+                     rea_jackcess::BlobValue{std::vector<std::uint8_t>(255, 0xa5)}, std::string(255, 'y')},
+                });
+                table->update_row(row_ids.front(),
+                                  {std::int32_t{10}, std::string("B"),
+                                   rea_jackcess::BlobValue{{1, 2, 3}}, std::string("🚀")});
+                std::cout << "Wrote UTF-8 TEXT and BINARY rows, including empty and NULL values\n";
+            } else if (fixed_numeric_rows) {
                 const auto row_ids = table->add_rows({
                     {std::int8_t{-128}, std::int16_t{-32768}, std::int32_t{-2147483647 - 1}, -1.25F, 1.0 / 3.0},
                     {std::int8_t{127}, std::int16_t{32767}, std::int32_t{2147483647}, 3.5F, 2.5},

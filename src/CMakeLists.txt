@@ -102,6 +102,7 @@ rea_jackcess_add_package(write
     write/jet4_global_usage_map.hpp
     write/jet4_row_writer.cpp
     write/jet4_row_writer.hpp
+    write/jet4_variable_type.hpp
     write/jet4_table_creator.cpp
     write/jet4_table_creator.hpp
     write/jet4_template_data.hpp
