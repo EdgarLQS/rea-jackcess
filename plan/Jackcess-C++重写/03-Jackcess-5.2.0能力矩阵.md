@@ -19,7 +19,7 @@ P0 放行前仍需补齐每项的适用格式、读/建/改/拒绝结果、具�
 
 | 能力域 | Jackcess 5.2.0 公开 API | 需要对齐的行为 | 上游测试入口 | 当前 C++ 状态与缺口 |
 |---|---|---|---|---|
-| 打开、创建与生命周期 | `DatabaseBuilder`、`Database`、`Database.FileFormat` | 既有库打开/只读模式；Jet/ACE 版本选择和新建；刷新、关闭、自动同步；密码、文件通道、字符集、时区、日期类型及打开选项 | `BuilderTest`、`DatabaseTest`、`DatabaseReadWriteTest`、`LocalDateTimeTest` | **部分实现**：`Database::open` 只读打开当前支持的 Jet4；文件头/页读取和关闭由 RAII 管理。创建、修改、配置项与跨格式行为未实现。 |
+| 打开、创建与生命周期 | `DatabaseBuilder`、`Database`、`Database.FileFormat` | 既有库打开/只读模式；Jet/ACE 版本选择和新建；刷新、关闭、自动同步；密码、文件通道、字符集、时区、日期类型及打开选项 | `BuilderTest`、`DatabaseTest`、`DatabaseReadWriteTest`、`LocalDateTimeTest` | **部分实现**：`Database::open` 只读打开 Jet4，`Database::create` 用官方模板创建 V2000/V2003 空库并经 Jackcess 5.2.0 回读；表/行修改、配置项与跨格式行为未实现。 |
 | 格式识别、编码和 codec | `Database.FileFormat`、`DataType`、`CodecProvider`、`CodecHandler` | Jet3、Generic Jet4、V2000/V2003、各 ACE 版本、MSISAM、有编码页的识别和逐操作拒绝；codec 调用顺序、部分页编码和错误传播 | `JetFormatTest`、`CodecHandlerTest`、`DatabaseTest` | **部分实现**：Jet/ACE 头识别；行读取目前限 Jet4。各引擎版本行为、MSISAM 和 codec 扩展未实现或未验证。 |
 | 数据库目录与库级元数据 | `Database`、`TableMetaData`、`PropertyMap`、`Relationship`、`query.Query` | 枚举系统/用户/隐藏/链接表、库属性、关系、已保存查询、linked database 与 resolver；对象名称、类型和错误语义 | `DatabaseTest`、`PropertiesTest`、`PropertyMapsTest`、`RelationshipTest`、`LinkedTableTest`、`QueryTest` | **部分实现**：Jet4 系统目录与普通本地表发现、部分属性/索引定义读取。库属性、关系、查询定义、链接表和完整对象分类未实现。 |
 | 表、列和结构构建 | `Table`、`TableDefinition`、`Column`、`TableBuilder`、`ColumnBuilder` | schema/属性/创建时间；列类型、大小、精度、可空性、默认值、自动编号、计算列、超链接、多值和版本列；建表、加列和名称转义/拒绝 | `TableTest`、`ColumnBuilderTest`、`BuilderTest`、`TableUpdaterTest`、`CalcFieldTest` | **部分实现**：Jet4 普通本地表 schema；列 `Required` 推导可空性；读取逻辑/物理索引定义。其他属性、结构构建与修改未实现。 |
@@ -42,7 +42,7 @@ P0 放行前仍需补齐每项的适用格式、读/建/改/拒绝结果、具�
 |---|---|---|---|---|
 | Jet3 V1997 | 待从 5.2.0 源码和用例逐项核对 | 计划为拒绝，需固定拒绝 API、错误和文件状态 | 计划只读，需验证每类修改入口拒绝 | 待建负例与原文件哈希断言 |
 | Generic Jet4 | 待核实 | 计划为拒绝 | 计划支持，需区分允许的改动 | 待从对应 fixture/test 映射 |
-| Jet4 V2000/V2003 | V2000 有限样本试验，其他行为待矩阵 | 未实现 | 未实现 | 未完成 |
+| Jet4 V2000/V2003 | V2000 有限样本试验，其他行为待矩阵 | **部分实现**：可新建空 V2000/V2003 库；表结构写入未实现 | 未实现 | 部分验证；读写矩阵与已有库修改未验收 |
 | ACE V2007/V2010/V2016/V2019 | 头识别已实现；schema/值/复杂列逐版待核实 | 未实现 | 未实现 | 未完成 |
 | MSISAM/有编码 Jet/ACE | 头/编码识别和拒绝边界待核实 | 待核实 | codec 接口和默认拒绝待核实 | 待补独立样本与自定义 codec 用例 |
 

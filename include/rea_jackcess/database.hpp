@@ -26,6 +26,11 @@ public:
     // Opens an existing Jet4 database read-only. Other formats remain unsupported here.
     static Database open(const std::filesystem::path& path);
 
+    // Creates an empty Jet4 V2000 or V2003 database, then opens it for reading.
+    // Table and row mutation is not yet available through this API.
+    // Concurrent creates targeting the same path must be serialized by the caller.
+    static Database create(const std::filesystem::path& path, DatabaseFormat format);
+
     const std::filesystem::path& path() const;
     const FormatInfo& format() const;
     // Diagnostics include tables that could not be described, such as linked tables.

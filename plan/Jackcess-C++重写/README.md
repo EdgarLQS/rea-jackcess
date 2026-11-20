@@ -4,7 +4,7 @@
 
 首期在原生 Linux x86_64 和 ARM64 上交付 C++ 核心库，完整对齐 Jackcess 5.2.0 的公开能力和可观察行为。采用 C++ 接口表达数据库、表、游标、类型化值、构建器和扩展点。Jet4 读写是第一个内部里程碑，核心库在全量行为矩阵通过后发布。
 
-当前已建立 C++17/CMake 构建、诊断 CLI、测试入口和公开只读读取接口。P1 已实现 Jet/ACE 引擎头识别、只读页访问，以及 Jet4 表定义、Usage Map、数据页行目录、溢出行跟随、普通本地表 schema 发现、流式逐行读取、基础类型值/长值解码、从 `MSysObjects.LvProp` 读取列 `Required` 属性以推导可空性、逻辑/物理索引定义读取，以及按 Jet4 B-tree 叶链顺序扫描索引记录。公开 `Database`、`Table`、`RowCursor`、`Row`、`RowId`、`Value` 可由核心库直接使用；`Row::id()` 提供页号和行号，`Table::indexes()` 提供逻辑索引元数据，`Table::rows_by_index()` 提供索引顺序扫描。`inspect` 输出内部诊断摘要；`canonical` 支持 Jet4 canonical JSON v1，输出 schema、列可空性、逻辑/物理索引定义、已支持类型的行值和行集哈希。其他列/表属性、索引键语义解码、按键查找/范围游标、构建器和写入尚未实现；P0 能力矩阵和关键难点核验待完成，上游同步 CI 待实施。以上是部分实现状态，不代表 P1 验收完成。
+当前已建立 C++17/CMake 构建、诊断 CLI、测试入口和公开读取接口。P1 已实现 Jet/ACE 引擎头识别、只读页访问，以及 Jet4 表定义、Usage Map、数据页行目录、溢出行跟随、普通本地表 schema 发现、流式逐行读取、基础类型值/长值解码、从 `MSysObjects.LvProp` 读取列 `Required` 属性以推导可空性、逻辑/物理索引定义读取，以及按 Jet4 B-tree 叶链顺序扫描索引记录。公开 `Database`、`Table`、`RowCursor`、`Row`、`RowId`、`Value` 可由核心库直接使用；`Database::create` 已可从固定模板创建空 V2000/V2003 文件，且经 C++ 和 Jackcess 5.2.0 回读，表/行修改尚未实现。`Row::id()` 提供页号和行号，`Table::indexes()` 提供逻辑索引元数据，`Table::rows_by_index()` 提供索引顺序扫描。`inspect` 输出内部诊断摘要；`canonical` 支持 Jet4 canonical JSON v1，输出 schema、列可空性、逻辑/物理索引定义、已支持类型的行值和行集哈希。其他列/表属性、索引键语义解码、按键查找/范围游标、表结构构建器、行写入，以及 P0 矩阵和关键难点核验仍待完成；上游同步 CI 待实施。以上是部分实现状态，不代表 P1/P2 验收完成。
 
 本机只读样本 `test_data_only_read/test_mdb.mdb`（SHA-256 `0bc0acb9c732de1e17c43c2d0a6019f7b5a62ccf83c5818a1bc42db7dbc460c6`）经 MDBTools 1.0.1 导出对照，系统目录 51 行的 `Id`、`ParentId`、`Name`、`Type`、`Flags` 均匹配。样本不纳入仓库测试资产；可重复的合成格式用例纳入 CTest。
 

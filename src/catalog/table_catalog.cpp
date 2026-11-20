@@ -11,6 +11,7 @@ namespace {
 constexpr std::int16_t table_object_type = 1;
 constexpr std::int16_t linked_odbc_object_type = 4;
 constexpr std::int16_t linked_table_object_type = 6;
+constexpr std::uint32_t system_object_flags = 0x80000002u;
 constexpr std::uint8_t system_table_type = 0x53;
 constexpr std::uint8_t user_table_type = 0x4e;
 
@@ -77,9 +78,11 @@ TableSchemaCatalog read_table_schema_catalog(const PageFile& file) {
                     }
                 }
             }
-            const bool is_user_table = definition.table_type == user_table_type;
+            const bool is_system_object = object.flags &&
+                                          (static_cast<std::uint32_t>(*object.flags) & system_object_flags) != 0;
+            const bool is_user_table = definition.table_type == user_table_type && !is_system_object;
             std::string object_type = "TABLE";
-            if (definition.table_type == system_table_type) {
+            if (definition.table_type == system_table_type || is_system_object) {
                 object_type = "SYSTEM_TABLE";
             } else if (!is_user_table) {
                 add_error(result, name, "Table definition has an unknown table type", *object.id);

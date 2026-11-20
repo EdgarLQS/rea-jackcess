@@ -1,3 +1,4 @@
+#include "rea_jackcess/database.hpp"
 #include "rea_jackcess/database_file.hpp"
 #include "rea_jackcess/version.hpp"
 #include "catalog/system_catalog.hpp"
@@ -72,12 +73,41 @@ void write_optional_string(const std::optional<std::string>& value) {
 int main(int argc, char* argv[]) {
     const std::string_view option = argc >= 2 ? argv[1] : "";
     if (argc == 1 || option == "--help") {
-        std::cout << "Usage: rea-jackcess [--help | --version | inspect <database-file> | canonical <database-file>]\n";
+        std::cout << "Usage: rea-jackcess [--help | --version | create <database-file> <v2000|v2003> | "
+                     "inspect <database-file> | canonical <database-file>]\n";
         return 0;
     }
     if (option == "--version") {
         std::cout << "rea-jackcess " << rea_jackcess::version() << '\n';
         return 0;
+    }
+    if (argc == 4 && option == "create") {
+        rea_jackcess::DatabaseFormat format;
+        const std::string_view format_option = argv[3];
+        if (format_option == "v2000") {
+            format = rea_jackcess::DatabaseFormat::v2000;
+        } else if (format_option == "v2003") {
+            format = rea_jackcess::DatabaseFormat::v2003;
+        } else {
+            std::cerr << "Unsupported database format: " << format_option << '\n';
+            return 2;
+        }
+
+        try {
+            const auto database = rea_jackcess::Database::create(argv[2], format);
+            const auto file = rea_jackcess::DatabaseFile::open(database.path());
+            const char* format_name = format == rea_jackcess::DatabaseFormat::v2000 ? "V2000" : "V2003";
+            std::cout << "Created empty Jet4 " << format_name << " database: " << database.path().string()
+                      << " (" << file.page_count() << " pages)\n";
+            return 0;
+        } catch (const rea_jackcess::DatabaseError& error) {
+            std::cerr << "Cannot create database: " << error.what();
+            if (!error.path().empty()) {
+                std::cerr << " [file: " << error.path().string() << ']';
+            }
+            std::cerr << '\n';
+            return 1;
+        }
     }
     if (argc == 3 && option == "canonical") {
         try {

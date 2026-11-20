@@ -20,6 +20,11 @@ enum class EngineVersion {
     msisam,
 };
 
+enum class DatabaseFormat {
+    v2000,
+    v2003,
+};
+
 enum class DatabaseErrorCode {
     io_error,
     truncated_file,

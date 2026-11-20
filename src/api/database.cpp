@@ -3,6 +3,7 @@
 #include "catalog/row_reader.hpp"
 #include "index/index_cursor.hpp"
 #include "value/jet4_value.hpp"
+#include "write/jet4_database_creator.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -300,6 +301,16 @@ Database Database::open(const std::filesystem::path& path) {
     auto file = detail::PageFile::open(path);
     auto schema = detail::read_table_schema_catalog(file);
     return Database(std::make_shared<detail::DatabaseState>(std::move(file), std::move(schema)));
+}
+
+Database Database::create(const std::filesystem::path& path, DatabaseFormat format) {
+    auto staged = detail::stage_jet4_database(path, format);
+    {
+        auto validation_database = Database::open(staged.temporary_path());
+        (void)validation_database.tables();
+    }
+    staged.publish();
+    return Database::open(path);
 }
 
 const std::filesystem::path& Database::path() const {

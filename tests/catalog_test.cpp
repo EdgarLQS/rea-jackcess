@@ -222,9 +222,10 @@ std::filesystem::path make_database_fixture() {
     const std::vector<std::uint8_t> usage_map{0x00, 0, 0, 0, 0, 0x30};
     write_data_page(file_bytes, 3, {usage_map}, {0});
     const std::vector<std::uint8_t> overflow_pointer{0, 5, 0, 0};
-    const auto second_row = make_catalog_row(2, 0, 1, 0, {0xff, 0xfe, 'A', 0, 0x2d, 0x4e, 0, 'B'});
+    const auto second_row = make_catalog_row(
+        2, 0, 1, 0x02u, {0xff, 0xfe, 'A', 0, 0x2d, 0x4e, 0, 'B'});
     write_data_page(file_bytes, 4, {overflow_pointer, second_row}, {0x4000, 0});
-    const auto overflow_row = make_catalog_row(1, 0, 1, 0x80000000u, utf16le(u"用户表"));
+    const auto overflow_row = make_catalog_row(1, 0, 1, 0, utf16le(u"用户表"));
     write_data_page(file_bytes, 5, {overflow_row}, {0x8000});
 
     std::ofstream output(path, std::ios::binary);
@@ -262,7 +263,8 @@ std::filesystem::path make_indexed_database_fixture() {
                      {0x00, 0, 0, 0, 0, 0xc0, 0x01}},
                     {0, 0});
     const std::vector<std::uint8_t> overflow_pointer{0, 5, 0, 0};
-    const auto second_row = make_catalog_row(2, 0, 1, 0, {0xff, 0xfe, 'A', 0, 0x2d, 0x4e, 0, 'B'});
+    const auto second_row = make_catalog_row(
+        2, 0, 1, 0x02u, {0xff, 0xfe, 'A', 0, 0x2d, 0x4e, 0, 'B'});
     const auto ignored_query = make_catalog_row(3, 0, 5, 0, utf16le(u"IgnoredQuery"));
     write_data_page(file_bytes,
                     4,
@@ -482,10 +484,10 @@ void test_usage_map_and_system_catalog() {
         const auto objects = rea_jackcess::detail::read_system_catalog_objects(file, definition);
         check(objects.size() == 2, "system catalog row count is incorrect");
         check(objects[0].id == 1 && objects[0].parent_id == 0 && objects[0].name == "用户表" &&
-                  objects[0].type == 1 && objects[0].flags == -2147483647 - 1,
+                  objects[0].type == 1 && objects[0].flags == 0,
               "overflow system catalog row was not decoded");
         check(objects[1].id == 2 && objects[1].parent_id == 0 && objects[1].name == "A中B" &&
-                  objects[1].type == 1 && objects[1].flags == 0,
+                  objects[1].type == 1 && objects[1].flags == 2,
               "compressed-text system catalog row was not decoded");
     } catch (...) {
         std::error_code ignored;
