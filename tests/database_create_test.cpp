@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -18,6 +19,11 @@ void check(bool condition, const std::string& message) {
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+std::uint16_t read_u16(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
+    return static_cast<std::uint16_t>(bytes[offset]) |
+           static_cast<std::uint16_t>(static_cast<std::uint16_t>(bytes[offset + 1]) << 8);
 }
 
 class TemporaryDirectory {
@@ -148,6 +154,23 @@ void test_create_empty_tables(const TemporaryDirectory& directory) {
 
     const auto file = rea_jackcess::DatabaseFile::open(path);
     check(file.page_count() == 28, "two empty tables did not append four Jet4 pages");
+
+    const auto global_usage_page = file.read_page(1);
+    const std::uint16_t usage_row_start = read_u16(global_usage_page, 14) & 0x1fff;
+    check(global_usage_page[usage_row_start] == 0,
+          "global usage map is not using the expected inline declaration");
+    const std::uint32_t first_page_number =
+        static_cast<std::uint32_t>(global_usage_page[usage_row_start + 1]) |
+        (static_cast<std::uint32_t>(global_usage_page[usage_row_start + 2]) << 8) |
+        (static_cast<std::uint32_t>(global_usage_page[usage_row_start + 3]) << 16) |
+        (static_cast<std::uint32_t>(global_usage_page[usage_row_start + 4]) << 24);
+    for (std::uint32_t page_number = 24; page_number < 28; ++page_number) {
+        const std::uint32_t bit_index = page_number - first_page_number;
+        const std::size_t bitmap_offset = usage_row_start + 5 + bit_index / 8;
+        const std::uint8_t bit_mask = static_cast<std::uint8_t>(1u << (bit_index % 8));
+        check((global_usage_page[bitmap_offset] & bit_mask) == 0,
+              "appended table page remains available in the global usage map");
+    }
 }
 
 void test_unsupported_table_schema_preserves_destination(const TemporaryDirectory& directory) {
