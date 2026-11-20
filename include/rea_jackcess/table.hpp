@@ -36,6 +36,33 @@ enum class DataType {
     unknown,
 };
 
+class ColumnBuilder {
+public:
+    ColumnBuilder(std::string name, DataType type);
+
+    const std::string& name() const noexcept;
+    DataType type() const noexcept;
+
+private:
+    std::string name_;
+    DataType type_;
+};
+
+class TableBuilder {
+public:
+    explicit TableBuilder(std::string name);
+
+    TableBuilder& add_column(ColumnBuilder column);
+    TableBuilder& add_column(std::string name, DataType type);
+
+    const std::string& name() const noexcept;
+    const std::vector<ColumnBuilder>& columns() const noexcept;
+
+private:
+    std::string name_;
+    std::vector<ColumnBuilder> columns_;
+};
+
 struct ColumnInfo {
     std::string name;
     DataType type;

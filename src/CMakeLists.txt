@@ -59,6 +59,7 @@ endfunction()
 rea_jackcess_add_package(api
     api/database.cpp
     api/database_file.cpp
+    api/table.cpp
     api/version.cpp
 )
 target_compile_definitions(rea_jackcess_api_objects PRIVATE
@@ -96,6 +97,8 @@ rea_jackcess_add_package(index
 rea_jackcess_add_package(write
     write/jet4_database_creator.cpp
     write/jet4_database_creator.hpp
+    write/jet4_table_creator.cpp
+    write/jet4_table_creator.hpp
     write/jet4_template_data.hpp
     "${rea_jackcess_template_source}"
 )

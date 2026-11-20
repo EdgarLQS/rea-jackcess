@@ -26,10 +26,17 @@ public:
     // Opens an existing Jet4 database read-only. Other formats remain unsupported here.
     static Database open(const std::filesystem::path& path);
 
-    // Creates an empty Jet4 V2000 or V2003 database, then opens it for reading.
-    // Table and row mutation is not yet available through this API.
-    // Concurrent creates targeting the same path must be serialized by the caller.
+    // Creates a Jet4 database, then opens it for reading.
+    // Concurrent calls to either create overload targeting the same path must be serialized by the caller.
     static Database create(const std::filesystem::path& path, DatabaseFormat format);
+
+    // Creates a Jet4 V2000 database with the supplied empty table schemas, then opens it for reading.
+    // Current schema writing supports LONG columns whose definition fits one page, and 1-64 character ASCII names
+    // containing letters, digits, spaces, or underscores.
+    // The returned Database handle remains read-only.
+    static Database create(const std::filesystem::path& path,
+                           DatabaseFormat format,
+                           const std::vector<TableBuilder>& tables);
 
     const std::filesystem::path& path() const;
     const FormatInfo& format() const;

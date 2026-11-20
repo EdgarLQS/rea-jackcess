@@ -4,6 +4,7 @@
 #include "index/index_cursor.hpp"
 #include "value/jet4_value.hpp"
 #include "write/jet4_database_creator.hpp"
+#include "write/jet4_table_creator.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -304,10 +305,50 @@ Database Database::open(const std::filesystem::path& path) {
 }
 
 Database Database::create(const std::filesystem::path& path, DatabaseFormat format) {
+    return create(path, format, {});
+}
+
+Database Database::create(const std::filesystem::path& path,
+                           DatabaseFormat format,
+                           const std::vector<TableBuilder>& tables) {
+    if (!tables.empty() && format != DatabaseFormat::v2000) {
+        throw DatabaseError(DatabaseErrorCode::unsupported_operation,
+                            "Initial table schema creation currently supports V2000 files only",
+                            path);
+    }
+
     auto staged = detail::stage_jet4_database(path, format);
+    for (const auto& table : tables) {
+        detail::create_jet4_table(staged.temporary_path(), format, table);
+    }
+
     {
         auto validation_database = Database::open(staged.temporary_path());
-        (void)validation_database.tables();
+        const auto created_tables = validation_database.tables();
+        for (const auto& expected : tables) {
+            const auto created = std::find_if(created_tables.begin(), created_tables.end(), [&](const Table& candidate) {
+                return candidate.name() == expected.name();
+            });
+            if (created == created_tables.end() || !created->is_user_table() ||
+                created->columns().size() != expected.columns().size()) {
+                throw DatabaseError(DatabaseErrorCode::corrupted_file,
+                                    "Staged database does not contain the requested table schema",
+                                    staged.temporary_path());
+            }
+            for (std::size_t index = 0; index < expected.columns().size(); ++index) {
+                if (created->columns()[index].name != expected.columns()[index].name() ||
+                    created->columns()[index].type != expected.columns()[index].type()) {
+                    throw DatabaseError(DatabaseErrorCode::corrupted_file,
+                                        "Staged database table columns do not match the requested schema",
+                                        staged.temporary_path());
+                }
+            }
+            if (created->rows().next()) {
+                throw DatabaseError(DatabaseErrorCode::corrupted_file,
+                                    "Newly created table unexpectedly contains rows",
+                                    staged.temporary_path());
+            }
+        }
     }
     staged.publish();
     return Database::open(path);
