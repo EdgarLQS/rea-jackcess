@@ -9,6 +9,11 @@ target_link_libraries(rea_jackcess_tests PRIVATE rea_jackcess::core)
 target_include_directories(rea_jackcess_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 add_test(NAME database_file COMMAND rea_jackcess_tests)
 
+add_executable(rea_jackcess_page_writer_tests page_writer_test.cpp)
+target_link_libraries(rea_jackcess_page_writer_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_page_writer_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME page_writer COMMAND rea_jackcess_page_writer_tests)
+
 add_executable(rea_jackcess_catalog_tests catalog_test.cpp)
 target_link_libraries(rea_jackcess_catalog_tests PRIVATE rea_jackcess::core)
 target_sources(rea_jackcess_catalog_tests PRIVATE "${PROJECT_SOURCE_DIR}/tools/cli/canonical_json.cpp")

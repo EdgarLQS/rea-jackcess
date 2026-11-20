@@ -26,6 +26,7 @@ enum class DatabaseErrorCode {
     unsupported_version,
     corrupted_file,
     page_out_of_range,
+    unsupported_operation,
 };
 
 struct DatabaseErrorContext {

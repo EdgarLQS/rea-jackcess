@@ -35,6 +35,7 @@ rea_jackcess_add_package(format
 rea_jackcess_add_package(page
     page/data_page.cpp
     page/page_file.cpp
+    page/page_writer.cpp
 )
 
 rea_jackcess_add_package(catalog
