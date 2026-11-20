@@ -4,9 +4,9 @@
 
 ## 当前状态
 
-目前已实现 Jet/ACE 版本头识别、只读页访问，以及 Jet4 表定义、Usage Map、数据页行目录、普通本地表 schema 发现和逐行读取。基础字段解码覆盖布尔值、整数、浮点、日期、Money/Numeric、文本、GUID、Binary、Memo/OLE 长值；Memo/OLE 保留原始负载字节，无法表示的短日期 serial 输出为 `$dateOutOfRange`。`DatabaseError` 可携带文件、页、表、行和列信息。公开 API 提供只读 `Database::open`、空 V2000/V2003 数据库创建，以及通过 `TableBuilder` 创建 V2000 LONG 列空表；目前表/列名限 ASCII 字母、数字、空格和下划线，创建后返回的 `Database` 句柄仍只读。`Table::indexes()` 返回逻辑索引定义，`Table::rows_by_index()` 可按指定 Jet4 索引顺序扫描记录。CLI 提供 `create`、`inspect` 和 `canonical`；`canonical` 输出 Jet4 canonical JSON v1，包括文件元数据、表/列定义、逻辑/物理索引定义、已支持类型的行值及行集哈希。
+目前已实现 Jet/ACE 版本头识别、只读页访问，以及 Jet4 表定义、Usage Map、数据页行目录、普通本地表 schema 发现和逐行读取。基础字段解码覆盖布尔值、整数、浮点、日期、Money/Numeric、文本、GUID、Binary、Memo/OLE 长值；Memo/OLE 保留原始负载字节，无法表示的短日期 serial 输出为 `$dateOutOfRange`。`DatabaseError` 可携带文件、页、表、行和列信息。公开 API 提供只读或显式读写 `Database::open`、空 V2000/V2003 数据库创建，以及通过 `TableBuilder` 创建 V2000 LONG 列空表；目前表/列名限 ASCII 字母、数字、空格和下划线，创建后返回的 `Database` 句柄仍只读。读写句柄的 `Table::add_row/add_rows` 可向无索引、定长 LONG 列表追加行；`Table::indexes()` 返回逻辑索引定义，`Table::rows_by_index()` 可按指定 Jet4 索引顺序扫描记录。CLI 提供 `create`、`inspect` 和 `canonical`；`canonical` 输出 Jet4 canonical JSON v1，包括文件元数据、表/列定义、逻辑/物理索引定义、已支持类型的行值及行集哈希。
 
-当前 P1/P2 仍在开发中，不能视为阶段或 Jackcess 兼容性验收完成。索引读取已能从 B-tree 定位最左叶页并沿叶页链返回行；键值语义解码、按键查找/范围游标、用户索引创建与维护尚未实现。列 `Required` 属性已用于推导公开 `ColumnInfo::nullable`；`Database::create(path, format, tables)` 可在 V2000 新库中创建一个或多个 LONG 列空表，并更新 `MSysObjects` 的目录行、`Id`/`ParentIdName` 索引和全局 Usage Map，已通过 C++ 重开、固定 Jackcess 5.2.0 独立打开，以及 Java 写入行后由 C++ 读取的对照。全局页图目前只支持模板内联范围。该写入路径目前不创建 ACE 权限行，V2003 表创建、其他字段类型、C++ 数据行写入、用户索引、页分裂及已有库修改删除仍待实施。`src/page/` 的内部 Jet4 原始页写入器支持既有文件的整页覆盖、末尾追加和显式刷新。尚未冻结的 P0 行为矩阵及上游同步 CI 也仍待实施。复杂列或无法识别的字段类型会保留为不支持值并记录在 `errors` 中。
+当前 P1/P2 仍在开发中，不能视为阶段或 Jackcess 兼容性验收完成。索引读取已能从 B-tree 定位最左叶页并沿叶页链返回行；键值语义解码、按键查找/范围游标、用户索引创建与维护尚未实现。列 `Required` 属性已用于推导公开 `ColumnInfo::nullable`；`Database::create(path, format, tables)` 可在 V2000 新库中创建一个或多个 LONG 列空表，并更新 `MSysObjects` 的目录行、`Id`/`ParentIdName` 索引和全局 Usage Map，已通过 C++ 重开和固定 Jackcess 5.2.0 独立打开检查。C++ 行写入目前限于无索引的定长 LONG 列表，需显式以 `read_write` 打开；批量追加跨页、NULL、只读拒绝和预验证均有 C++ 回归，Jackcess 5.2.0 已逐行回读 500 行跨页批次和一行 NULL，反向的 Java 写入 LONG 值 42 也已由 C++ canonical 读取。`read_write` 句柄持有数据库文件的 OS advisory 排他锁，避免合作的进程同时获取写句柄；替换已存在且正被写入的数据库也会被拒绝，同一句柄内的操作另行串行化。全局页图和表 Usage Map 目前只支持内联范围，表的两个 Usage Map 声明须共用一页。该写入路径目前不创建 ACE 权限行，也不维护用户索引；V2003 表创建、其他字段类型、行更新删除、索引页分裂及事务恢复仍待实施。外部非合作写入者、部分 I/O 失败后的回滚或自动修复尚未处理；失败后当前句柄拒绝后续写入。`src/page/` 的内部 Jet4 原始页写入器支持既有文件的整页覆盖、末尾追加和显式刷新。尚未冻结的 P0 行为矩阵及上游同步 CI 也仍待实施。复杂列或无法识别的字段类型会保留为不支持值并记录在 `errors` 中。
 
 已有的本机只读样本 `test_data_only_read/test_mdb.mdb`（SHA-256 `0bc0acb9c732de1e17c43c2d0a6019f7b5a62ccf83c5818a1bc42db7dbc460c6`）曾用于有限对照：系统目录 51 行与 MDBTools 1.0.1 导出在 5 个字段上匹配；Jackcess 5.2.0 canonical 对照的 43 张共同用户表无 schema 或行值差异；138 个用户逻辑索引的逐索引 `page:row` 遍历序列与 Jackcess 完全一致。该样本不属于仓库测试资产，这些结果也不替代本仓库回归或产品验收。
 
@@ -29,21 +29,21 @@ cmake --build build
 
 | 目录 | 职责 |
 |---|---|
-| `include/rea_jackcess/` | 对外 C++ 接口。当前有 RAII 文件句柄、只读打开/空 V2000/V2003 创建 `Database`、Jet4 V2000 的 `TableBuilder`/`ColumnBuilder`、`Table`、`RowCursor`、`Row` 和 `Value`；行写入及属性接口待后续工作包。 |
-| `src/api/` | 公开类的实现门面，组合内部解析和写入模块；当前提供只读数据库访问、空 Jet4 数据库创建和带初始 schema 的 V2000 创建。 |
+| `include/rea_jackcess/` | 对外 C++ 接口。当前有 RAII 文件句柄、数据库读写打开/空 V2000/V2003 创建 `Database`、Jet4 V2000 的 `TableBuilder`/`ColumnBuilder`、`Table`、`RowCursor`、`Row` 和 `Value`；`Table` 支持受限 LONG 行追加。 |
+| `src/api/` | 公开类的实现门面，组合内部解析和写入模块；当前提供数据库读写打开、空 Jet4 数据库创建、带初始 schema 的 V2000 创建和受限行追加。 |
 | `src/format/` | Jet/ACE 版本和格式布局；当前识别已列出的版本头，按格式分别补充页、记录及编码规则。 |
-| `src/page/` | 有界随机页 I/O、Jet4 数据页行目录及内部原始页写入器；写入器仅支持既有 Jet4 文件的整页覆盖、末尾追加和刷新，页分配与格式语义写入待实现。 |
+| `src/page/` | 有界随机页 I/O、Jet4 数据页行目录、内部原始页写入器和 advisory 写锁；写入器仅支持既有 Jet4 文件的整页覆盖、末尾追加和刷新，页分配与格式语义写入待实现。 |
 | `src/catalog/` | 系统目录、表定义、列 schema、`LvProp` 中的列 `Required` 属性、逻辑/物理索引定义、Usage Map 和通用行读取；当前发现普通本地表并装载 Jet4 表 schema/记录。 |
 | `src/value/` | 字段解码、类型化值和长值；当前提供 Jet4 基础标量、日期、十进制、文本、GUID、二进制及 Memo/OLE 长值解码。 |
 | `src/metadata/` | 库/表/列属性、关系、约束和逻辑索引语义；待实现。当前 Jet4 属性块和索引定义解析留在 `catalog`。 |
 | `src/index/` | Jet4 B-tree 页遍历；当前支持沿索引叶页顺序读取行位置。键值语义解码、查找/范围游标、索引维护待实现。 |
 | `src/expression/` | 默认值、校验、计算列和查询表达式；待实现。 |
 | `src/query/` | 行过滤、组合游标和公开查询流程；待实现。 |
-| `src/write/` | 数据库创建和后续表/行写入；当前从随核心库嵌入的 V2000/V2003 官方模板创建空库，支持 V2000 LONG 列空表 schema，维护系统目录和两个系统索引，并在同目录暂存、C++ 回读校验后发布；通用页分配、V2003 schema、ACL、用户索引、行修改待实现。 |
+| `src/write/` | 数据库创建和后续表/行写入；当前从随核心库嵌入的 V2000/V2003 官方模板创建空库，支持 V2000 LONG 列空表 schema，维护系统目录和两个系统索引，并在同目录暂存、C++ 回读校验后发布；可在 Jet4 中向无索引、定长 LONG 列表追加行并维护数据页和内联 Usage Map。通用/扩展页分配、V2003 schema、ACL、索引维护、更新删除和事务恢复待实现。 |
 | `src/util/` | 与具体格式无关的内部帮助代码；当前提供 SHA-256 文件摘要。 |
 | `tools/cli/` | 诊断和互操作对照工具；当前提供帮助、版本、Jet4 `inspect` 摘要和含行值的 `canonical` JSON v1。 |
-| `tools/validation/` | 手动互操作探针；当前提供索引行序列对照、空库回读，以及生成和用 Jackcess 5.2.0 检查 V2000 LONG 列空表的工具。 |
-| `tests/` | CTest 单元与格式回归入口；当前覆盖头识别、页 I/O、Jet4 空库和 LONG 列空表创建、模板替换保护、目录/值读取、列属性/索引定义和公开只读接口。 |
+| `tools/validation/` | 手动互操作探针；当前提供索引行序列对照、空库回读、LONG 列空表检查，以及 Jackcess 5.2.0 对跨页批量写入回读。 |
+| `tests/` | CTest 单元与格式回归入口；当前覆盖头识别、页 I/O、Jet4 空库和 LONG 列空表创建、模板替换保护、目录/值读取、列属性/索引定义、公开只读与读写接口及受限行追加。 |
 | `adapters/pgeo/`（规划） | 单独依赖核心库和 GDAL 的 PGeo 导入、样本克隆适配。 |
 
 C++ 以目录划分内部模块：公开接口使用 `rea_jackcess` 命名空间，内部实现使用 `rea_jackcess::detail`。现有 `api`、`format`、`page`、`catalog`、`value`、`index`、`write`、`util` 由 `src/CMakeLists.txt` 编译为内部对象包，并合并进单一 `rea_jackcess::core` 静态库。构建目标还包括 `rea_jackcess_cli`（产物名 `rea-jackcess`）、页写入/数据库创建/目录回归目标。完整包边界和依赖方向见[源码架构](src/ARCHITECTURE.md)。
@@ -55,8 +55,8 @@ C++ 以目录划分内部模块：公开接口使用 `rea_jackcess` 命名空间
 | API 类别 | 目标职责 |
 |---|---|
 | `DatabaseFile` | 当前接口：以 RAII 方式打开文件、返回格式信息和原始页。 |
-| `Database` / `DatabaseBuilder` | `Database::open` 打开 Jet4 只读库；`Database::create` 创建 V2000/V2003 空库，或按 builder 创建 V2000 LONG 列空表，并返回只读句柄。行修改和库属性 API 待实现。 |
-| `Table` / `TableBuilder` | 当前读取表/列 schema 和逻辑索引定义；builder 可声明初始表名和 LONG 列，写入目前受 V2000、ASCII 名称范围和空表限制；表属性、用户索引、行写入及结构变更待实现。 |
+| `Database` / `DatabaseBuilder` | `Database::open` 打开 Jet4 只读库或显式读写库；`Database::create` 创建 V2000/V2003 空库，或按 builder 创建 V2000 LONG 列空表，并返回只读句柄。库属性 API 待实现。 |
+| `Table` / `TableBuilder` | 当前读取表/列 schema 和逻辑索引定义；builder 可声明初始表名和 LONG 列；显式读写库可对无索引定长 LONG 列表执行行追加。表属性、用户索引维护、行更新删除及结构变更待实现。 |
 | `RowCursor` / `Row` / `RowId` | 当前支持顺序读取、Jet4 索引叶链顺序读取和物理页/行标识；字段名便捷访问待实现。 |
 | `Value` | 当前表示已实现类型、NULL、超范围日期、Memo/OLE 负载及不支持类型。 |
 | 属性与索引 API | 当前读取列 `Required` 属性与索引定义，并支持按索引顺序扫描；其余属性、关系、按键查找和范围查询待实现。 |

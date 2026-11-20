@@ -20,13 +20,23 @@ struct DatabaseDiagnostic {
     std::optional<std::uint64_t> page_number;
 };
 
+enum class DatabaseOpenMode {
+    read_only,
+    read_write,
+};
+
 // Accessors on a moved-from Database throw std::logic_error.
 class Database {
 public:
     // Opens an existing Jet4 database read-only. Other formats remain unsupported here.
     static Database open(const std::filesystem::path& path);
 
+    // Opens an existing Jet4 database with the requested access mode.
+    // Read-write handles hold an exclusive advisory lock until all dependent handles are closed.
+    static Database open(const std::filesystem::path& path, DatabaseOpenMode mode);
+
     // Creates a Jet4 database, then opens it for reading.
+    // Replacing an existing file fails while it has an active read-write handle.
     // Concurrent calls to either create overload targeting the same path must be serialized by the caller.
     static Database create(const std::filesystem::path& path, DatabaseFormat format);
 

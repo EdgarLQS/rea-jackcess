@@ -116,6 +116,10 @@ public:
     RowCursor rows() const;
     // Scans rows in the order of the named index. The index name must match exactly.
     RowCursor rows_by_index(const std::string& index_name) const;
+    // Adds one row to an explicitly read-write database; returns its physical location.
+    RowId add_row(const std::vector<Value>& values);
+    // Adds a batch of rows and returns their physical locations in input order.
+    std::vector<RowId> add_rows(const std::vector<std::vector<Value>>& rows);
 
 private:
     explicit Table(std::shared_ptr<detail::TableState> state);

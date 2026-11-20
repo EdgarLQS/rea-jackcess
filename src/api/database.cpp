@@ -4,10 +4,13 @@
 #include "index/index_cursor.hpp"
 #include "value/jet4_value.hpp"
 #include "write/jet4_database_creator.hpp"
+#include "write/jet4_row_writer.hpp"
 #include "write/jet4_table_creator.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <stdexcept>
+#include <system_error>
 #include <utility>
 
 namespace rea_jackcess {
@@ -134,8 +137,14 @@ const detail::TableState& checked_state(const std::shared_ptr<detail::TableState
 
 namespace detail {
 
-DatabaseState::DatabaseState(PageFile source_file, TableSchemaCatalog source_schema)
-    : file(std::move(source_file)), schema(std::move(source_schema)) {
+DatabaseState::DatabaseState(PageFile source_file,
+                             TableSchemaCatalog source_schema,
+                             bool source_writable,
+                             std::optional<PageFileWriteLock> source_write_lock)
+    : file(std::move(source_file)),
+      schema(std::move(source_schema)),
+      writable(source_writable),
+      write_lock(std::move(source_write_lock)) {
     columns.reserve(schema.tables.size());
     indexes.reserve(schema.tables.size());
     for (const auto& table : schema.tables) {
@@ -296,12 +305,43 @@ RowCursor Table::rows_by_index(const std::string& index_name) const {
     return RowCursor(std::make_unique<RowCursor::Impl>(state_, index->root_page_number));
 }
 
+RowId Table::add_row(const std::vector<Value>& values) {
+    const auto row_ids = add_rows({values});
+    return row_ids.front();
+}
+
+std::vector<RowId> Table::add_rows(const std::vector<std::vector<Value>>& rows) {
+    const auto& state = checked_state(state_);
+    detail::Jet4WriteContext context{state.database->file,
+                                     state.database->schema,
+                                     state.database->writable,
+                                     state.database->write_state_valid,
+                                     state.database->write_mutex};
+    return detail::append_jet4_rows(context, state.schema_index, rows);
+}
+
 Database::Database(std::shared_ptr<detail::DatabaseState> state) : state_(std::move(state)) {}
 
 Database Database::open(const std::filesystem::path& path) {
+    return open(path, DatabaseOpenMode::read_only);
+}
+
+Database Database::open(const std::filesystem::path& path, DatabaseOpenMode mode) {
+    if (mode != DatabaseOpenMode::read_only && mode != DatabaseOpenMode::read_write) {
+        throw DatabaseError(DatabaseErrorCode::unsupported_operation,
+                            "Unknown database open mode",
+                            path);
+    }
+    std::optional<detail::PageFileWriteLock> write_lock;
+    if (mode == DatabaseOpenMode::read_write) {
+        write_lock.emplace(detail::PageFileWriteLock::acquire(path));
+    }
     auto file = detail::PageFile::open(path);
     auto schema = detail::read_table_schema_catalog(file);
-    return Database(std::make_shared<detail::DatabaseState>(std::move(file), std::move(schema)));
+    return Database(std::make_shared<detail::DatabaseState>(std::move(file),
+                                                            std::move(schema),
+                                                            mode == DatabaseOpenMode::read_write,
+                                                            std::move(write_lock)));
 }
 
 Database Database::create(const std::filesystem::path& path, DatabaseFormat format) {
@@ -314,6 +354,17 @@ Database Database::create(const std::filesystem::path& path,
     if (!tables.empty() && format != DatabaseFormat::v2000) {
         throw DatabaseError(DatabaseErrorCode::unsupported_operation,
                             "Initial table schema creation currently supports V2000 files only",
+                            path);
+    }
+
+    std::optional<detail::PageFileWriteLock> replacement_lock;
+    std::error_code existence_error;
+    if (std::filesystem::exists(path, existence_error)) {
+        replacement_lock.emplace(detail::PageFileWriteLock::acquire_for_replacement(path));
+    } else if (existence_error) {
+        throw DatabaseError(DatabaseErrorCode::io_error,
+                            "Cannot determine whether the database destination exists: " +
+                                existence_error.message(),
                             path);
     }
 

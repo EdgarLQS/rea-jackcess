@@ -173,6 +173,125 @@ void test_create_empty_tables(const TemporaryDirectory& directory) {
     }
 }
 
+void test_add_rows_to_unindexed_long_table(const TemporaryDirectory& directory) {
+    const auto path = directory.file("row-write.mdb");
+    rea_jackcess::TableBuilder table_builder("T");
+    table_builder.add_column("Id", rea_jackcess::DataType::int32);
+    table_builder.add_column("GroupId", rea_jackcess::DataType::int32);
+    {
+        const auto created = rea_jackcess::Database::create(
+            path,
+            rea_jackcess::DatabaseFormat::v2000,
+            std::vector<rea_jackcess::TableBuilder>{table_builder});
+        (void)created;
+    }
+
+    const auto before_read_only_write = read_bytes(path);
+    {
+        auto read_only = rea_jackcess::Database::open(path);
+        auto tables = read_only.tables();
+        const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& value) {
+            return value.name() == "T";
+        });
+        check(table != tables.end(), "read-only database did not expose table T");
+        check(table->add_rows({}).empty(), "empty batch insertion should be a no-op");
+        expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+            (void)table->add_row({rea_jackcess::Value{std::int32_t{42}}});
+        });
+    }
+    check(read_bytes(path) == before_read_only_write,
+          "read-only row insertion changed the database file");
+
+    {
+        auto first_writer = rea_jackcess::Database::open(path, rea_jackcess::DatabaseOpenMode::read_write);
+        (void)first_writer;
+        expect_error(rea_jackcess::DatabaseErrorCode::io_error, [&] {
+            auto second_writer = rea_jackcess::Database::open(
+                path, rea_jackcess::DatabaseOpenMode::read_write);
+            (void)second_writer;
+        });
+        const auto before_locked_replace = read_bytes(path);
+        expect_error(rea_jackcess::DatabaseErrorCode::io_error, [&] {
+            auto replacement = rea_jackcess::Database::create(
+                path, rea_jackcess::DatabaseFormat::v2000);
+            (void)replacement;
+        });
+        check(read_bytes(path) == before_locked_replace,
+              "database creation changed a target held by a read-write handle");
+    }
+
+    std::vector<rea_jackcess::RowId> batch_ids;
+    {
+        auto writable = rea_jackcess::Database::open(path, rea_jackcess::DatabaseOpenMode::read_write);
+        auto tables = writable.tables();
+        auto table = std::find_if(tables.begin(), tables.end(), [](const auto& value) {
+            return value.name() == "T";
+        });
+        check(table != tables.end(), "read-write database did not expose table T");
+
+        const auto first_id = table->add_row({rea_jackcess::Value{std::int32_t{42}},
+                                              rea_jackcess::Value{std::int32_t{-7}}});
+        check(first_id.page_number == 26 && first_id.row_number == 0,
+              "single-row insertion returned the wrong physical RowId");
+
+        std::vector<std::vector<rea_jackcess::Value>> batch;
+        batch.reserve(500);
+        for (std::int32_t value = 0; value < 500; ++value) {
+            batch.push_back({rea_jackcess::Value{value}, rea_jackcess::Value{value + 1000}});
+        }
+        batch_ids = table->add_rows(batch);
+        check(batch_ids.size() == 500, "batch insertion returned the wrong RowId count");
+        check(batch_ids[253].page_number == 26 && batch_ids[253].row_number == 254,
+              "batch insertion did not fill the first 255-row data page");
+        check(batch_ids[254].page_number == 27 && batch_ids[254].row_number == 0,
+              "batch insertion did not continue on a second data page");
+        check(batch_ids[451].page_number == 27 && batch_ids[451].row_number == 197,
+              "batch insertion returned the wrong row location on the second data page");
+        check(table->row_count_header() == 501,
+              "writable Table handle did not refresh its row-count header");
+
+        const auto before_invalid_write = read_bytes(path);
+        expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+            (void)table->add_row({rea_jackcess::Value{std::string("wrong type")},
+                                  rea_jackcess::Value{std::int32_t{1}}});
+        });
+        check(read_bytes(path) == before_invalid_write,
+              "invalid row value modified the database before validation failed");
+
+        (void)table->add_row({rea_jackcess::Value{std::int32_t{501}},
+                              rea_jackcess::Value{std::monostate{}}});
+        check(table->row_count_header() == 502,
+              "nullable LONG row did not update the row-count header");
+
+        auto rows = table->rows();
+        const auto first = rows.next();
+        check(first && std::get<std::int32_t>(first->at(0)) == 42 &&
+                  std::get<std::int32_t>(first->at(1)) == -7,
+              "single-row insertion could not be read from the writable handle");
+        for (std::int32_t expected = 0; expected < 500; ++expected) {
+            const auto row = rows.next();
+            check(row && std::get<std::int32_t>(row->at(0)) == expected &&
+                      std::get<std::int32_t>(row->at(1)) == expected + 1000,
+                  "batch insertion changed row values or order");
+        }
+        const auto null_row = rows.next();
+        check(null_row && std::get<std::int32_t>(null_row->at(0)) == 501 &&
+                  std::holds_alternative<std::monostate>(null_row->at(1)),
+              "batch insertion did not preserve a nullable LONG value");
+        check(!rows.next(), "row cursor returned extra rows after a 500-row batch");
+    }
+
+    const auto reopened = rea_jackcess::Database::open(path);
+    const auto tables = reopened.tables();
+    const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& value) {
+        return value.name() == "T";
+    });
+    check(table != tables.end() && table->row_count_header() == 502,
+          "read-only reopen did not observe the inserted rows");
+    const auto file = rea_jackcess::DatabaseFile::open(path);
+    check(file.page_count() == 28, "cross-page batch did not allocate exactly two data pages");
+}
+
 void test_unsupported_table_schema_preserves_destination(const TemporaryDirectory& directory) {
     const auto path = directory.file("unsupported-schema.mdb");
     check_empty_database(path, rea_jackcess::DatabaseFormat::v2000, 24);
@@ -254,6 +373,7 @@ int main() {
         test_create_formats_and_replace(directory);
         test_missing_parent(directory);
         test_create_empty_tables(directory);
+        test_add_rows_to_unindexed_long_table(directory);
         test_unsupported_table_schema_preserves_destination(directory);
         test_table_definition_page_boundary_is_supported(directory);
         test_oversized_table_definition_is_rejected(directory);

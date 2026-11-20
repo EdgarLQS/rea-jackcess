@@ -1,10 +1,11 @@
 #include "jet4_table_creator.hpp"
+#include "jet4_byte_order.hpp"
+#include "jet4_global_usage_map.hpp"
 
 #include "../catalog/row_reader.hpp"
 #include "../catalog/system_catalog.hpp"
 #include "../catalog/table_definition.hpp"
 #include "../catalog/usage_map.hpp"
-#include "../page/data_page.hpp"
 #include "../page/page_file.hpp"
 #include "../page/page_types.hpp"
 #include "../page/page_writer.hpp"
@@ -59,34 +60,10 @@ constexpr std::int16_t directory_object_type = 3;
     throw DatabaseError(DatabaseErrorCode::corrupted_file, message, path, page_number);
 }
 
-std::uint16_t read_u16(const std::vector<std::uint8_t>& bytes, std::uint64_t offset) {
-    return static_cast<std::uint16_t>(bytes[offset]) |
-           static_cast<std::uint16_t>(static_cast<std::uint16_t>(bytes[offset + 1]) << 8);
-}
-
-std::uint32_t read_u32(const std::vector<std::uint8_t>& bytes, std::uint64_t offset) {
-    return static_cast<std::uint32_t>(bytes[offset]) |
-           (static_cast<std::uint32_t>(bytes[offset + 1]) << 8) |
-           (static_cast<std::uint32_t>(bytes[offset + 2]) << 16) |
-           (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
-}
-
-void write_u16(std::vector<std::uint8_t>& bytes, std::uint64_t offset, std::uint16_t value) {
-    bytes[offset] = static_cast<std::uint8_t>(value & 0xff);
-    bytes[offset + 1] = static_cast<std::uint8_t>((value >> 8) & 0xff);
-}
-
 void write_u24_le(std::vector<std::uint8_t>& bytes, std::uint64_t offset, std::uint32_t value) {
     bytes[offset] = static_cast<std::uint8_t>(value & 0xff);
     bytes[offset + 1] = static_cast<std::uint8_t>((value >> 8) & 0xff);
     bytes[offset + 2] = static_cast<std::uint8_t>((value >> 16) & 0xff);
-}
-
-void write_u32(std::vector<std::uint8_t>& bytes, std::uint64_t offset, std::uint32_t value) {
-    bytes[offset] = static_cast<std::uint8_t>(value & 0xff);
-    bytes[offset + 1] = static_cast<std::uint8_t>((value >> 8) & 0xff);
-    bytes[offset + 2] = static_cast<std::uint8_t>((value >> 16) & 0xff);
-    bytes[offset + 3] = static_cast<std::uint8_t>((value >> 24) & 0xff);
 }
 
 void append_u16(std::vector<std::uint8_t>& bytes, std::uint16_t value) {
@@ -417,43 +394,6 @@ std::vector<std::uint8_t> read_database_owner(const PageFile& file,
         }
     }
     return {0xa6, 0x33};
-}
-
-std::vector<std::uint8_t> clear_global_free_page_bits(const PageFile& file,
-                                                     const std::vector<std::uint64_t>& allocated_pages) {
-    constexpr std::uint64_t global_usage_map_page_number = 1;
-    constexpr std::uint8_t global_usage_map_row_number = 0;
-    constexpr std::uint64_t inline_map_data_offset = 5;
-
-    auto page = file.read_page(global_usage_map_page_number);
-    const DataPage data_page = parse_data_page(file, global_usage_map_page_number, page);
-    if (global_usage_map_row_number >= data_page.rows.size()) {
-        corrupted_file(file.path(), global_usage_map_page_number, "Global usage map declaration row is missing");
-    }
-    const auto& declaration = data_page.rows[global_usage_map_row_number];
-    if (declaration.deleted || declaration.overflow || declaration.bytes.size() < inline_map_data_offset ||
-        declaration.bytes[0] != 0) {
-        unsupported_operation(file.path(), "Global usage map promotion is not yet supported for table creation");
-    }
-
-    const std::uint64_t first_page_number = read_u32(declaration.bytes, 1);
-    const std::uint64_t bitmap_size = declaration.bytes.size() - inline_map_data_offset;
-    for (const std::uint64_t page_number : allocated_pages) {
-        if (page_number < first_page_number ||
-            page_number - first_page_number >= bitmap_size * 8) {
-            unsupported_operation(file.path(), "Global usage map expansion is not yet supported for table creation");
-        }
-
-        const std::uint64_t bit_index = page_number - first_page_number;
-        const std::uint64_t bitmap_offset = declaration.start_offset + inline_map_data_offset + bit_index / 8;
-        const std::uint8_t bit_mask = static_cast<std::uint8_t>(1u << (bit_index % 8));
-        if ((page[bitmap_offset] & bit_mask) == 0) {
-            corrupted_file(file.path(), global_usage_map_page_number,
-                           "Appended table page is not marked free in the global usage map");
-        }
-        page[bitmap_offset] = static_cast<std::uint8_t>(page[bitmap_offset] & ~bit_mask);
-    }
-    return page;
 }
 
 std::vector<std::uint8_t> build_system_catalog_row(const std::filesystem::path& path,
@@ -848,7 +788,7 @@ void create_jet4_table(const std::filesystem::path& path,
                                                             table);
         usage_map_page = build_usage_map_page(path, file.format().page_size);
         page_updates.emplace_back(1,
-                                  clear_global_free_page_bits(file,
+                                  mark_global_pages_allocated(file,
                                                               {table_definition_page_number,
                                                                usage_map_page_number}));
     }
