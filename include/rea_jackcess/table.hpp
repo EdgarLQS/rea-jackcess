@@ -120,6 +120,10 @@ public:
     RowId add_row(const std::vector<Value>& values);
     // Adds a batch of rows and returns their physical locations in input order.
     std::vector<RowId> add_rows(const std::vector<std::vector<Value>>& rows);
+    // Updates local, unindexed Jet4 fixed-numeric rows in place when the encoded row size is unchanged.
+    void update_row(RowId row_id, const std::vector<Value>& values);
+    // Marks a live local, unindexed Jet4 row as deleted.
+    void delete_row(RowId row_id);
 
 private:
     explicit Table(std::shared_ptr<detail::TableState> state);

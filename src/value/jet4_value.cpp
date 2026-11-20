@@ -1,5 +1,6 @@
 #include "jet4_value.hpp"
 
+#include "../util/little_endian.hpp"
 #include "../page/data_page.hpp"
 #include "text_codec.hpp"
 
@@ -58,23 +59,6 @@ constexpr std::uint8_t extended_date_time_type = 0x14;
                         file.path(),
                         page_number ? page_number : std::optional<std::uint64_t>(row.page_number),
                         std::move(context));
-}
-
-std::uint16_t read_u16(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
-    return static_cast<std::uint16_t>(bytes[offset]) |
-           static_cast<std::uint16_t>(static_cast<std::uint16_t>(bytes[offset + 1]) << 8);
-}
-
-std::uint32_t read_u32(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
-    return static_cast<std::uint32_t>(bytes[offset]) |
-           (static_cast<std::uint32_t>(bytes[offset + 1]) << 8) |
-           (static_cast<std::uint32_t>(bytes[offset + 2]) << 16) |
-           (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
-}
-
-std::uint64_t read_u64(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
-    return static_cast<std::uint64_t>(read_u32(bytes, offset)) |
-           (static_cast<std::uint64_t>(read_u32(bytes, offset + 4)) << 32);
 }
 
 DataPage read_value_page(const PageFile& file,

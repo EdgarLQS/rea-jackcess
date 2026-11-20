@@ -13,7 +13,7 @@
 | 行访问 | `RowCursor`、`Row`、`RowId` | 顺序只读访问、按 Jet4 索引叶链顺序扫描和物理行标识已实现 |
 | 字段值 | `Value` 及类型化载荷 | Jet4 基础类型和 Memo/OLE 原始载荷已实现 |
 | 错误 | `DatabaseError`、`DatabaseDiagnostic` | 带文件、页、表、行、列上下文的只读错误与诊断已实现 |
-| 构建与修改 | `Database::create`、`TableBuilder`、行写入 | 可建空 V2000/V2003 文件；可在 V2000 新建 LONG 列空表；显式读写句柄可向无索引、定长 LONG 列表追加行 |
+| 构建与修改 | `Database::create`、`TableBuilder`、行写入 | 可建空 V2000/V2003 文件；可在 V2000 新建 BYTE/SHORT/LONG/SINGLE/DOUBLE 列空表；显式读写句柄可向无索引定长数值列列表追加行、按 RowId 对等长数值记录原位更新，并删除无索引本地 Jet4 表中的行 |
 | 关系、属性、查询 | 关系/属性访问、过滤与索引游标 | 按对应行为矩阵逐步补齐 |
 
 公开头文件不暴露 `detail` 类型、文件页结构或第三方验证工具类型。未实现行为先留在实现计划中，不作为可链接 API 承诺。
@@ -22,7 +22,7 @@
 
 | 包 | 源码位置 | 边界与状态 |
 |---|---|---|
-| API 门面 | `src/api/` | 组合内部实现并提供公开类方法；当前支持读写打开、空库创建、带表 schema 的 V2000 创建和受限行追加；写入上下文通过轻量结构传给 `write`，不形成包循环 |
+| API 门面 | `src/api/` | 组合内部实现并提供公开类方法；当前支持读写打开、空库创建、带表 schema 的 V2000 创建、受限行追加、等长原位更新和无索引表行删除；写入上下文通过轻量结构传给 `write`，不形成包循环 |
 | 格式 | `src/format/` | Jet/ACE 版本识别、格式布局和格式特有编码规则；当前实现版本头识别 |
 | 页 | `src/page/` | 有界页 I/O、页结构、缓存和分配；当前提供只读页访问、Jet4 数据页行目录、Jet4 原始页覆盖/追加/刷新和跨句柄 advisory 写锁 |
 | 目录 | `src/catalog/` | 系统目录、表定义、schema、Usage Map、行发现/读取及其物理元数据解析；当前支持 Jet4 读取 |
@@ -31,8 +31,8 @@
 | 索引 | `src/index/` | Jet4 B-tree 页解析、从根定位最左叶页并沿叶链返回行位置已实现；键语义解码、查找/范围游标和索引维护待实施 |
 | 表达式 | `src/expression/` | 默认值、校验、计算列和查询表达式；待实施 |
 | 查询 | `src/query/` | 行过滤、组合游标和公开查询流程；待实施 |
-| 写入 | `src/write/` | 当前嵌入官方 V2000/V2003 模板并执行同目录暂存、C++ 回读校验和发布；Jet4 V2000 初始空表写入支持 LONG 列并更新 `MSysObjects`、系统索引和模板内联全局 Usage Map；行写入可向无索引定长 LONG 列表追加记录，并维护数据页、表内联 Usage Map、全局页图和行数；页图/表图扩展、V2003 表写入、用户索引及事务恢复待实施 |
-| 通用工具 | `src/util/` | 与具体格式无关的内部帮助代码；当前提供 SHA-256 |
+| 写入 | `src/write/` | 当前嵌入官方 V2000/V2003 模板并执行同目录暂存、C++ 回读校验和发布；Jet4 V2000 初始空表写入支持 BYTE/SHORT/LONG/SINGLE/DOUBLE 列并更新 `MSysObjects`、系统索引和模板内联全局 Usage Map；行写入可向无索引定长数值列列表追加记录、通过 RowId 原位替换等长记录，并在无索引本地表中标记行删除和更新行数；其他字段类型、页图/表图扩展、V2003 表写入、用户索引、变长更新及事务恢复待实施 |
+| 通用工具 | `src/util/` | 与具体格式无关的内部帮助代码；当前提供 SHA-256 和共享小端读写辅助函数 |
 
 `src/CMakeLists.txt` 将已有实现编译为 `api`、`format`、`page`、`catalog`、`value`、`index`、`write`、`util` 内部对象包，再合并进一个 `rea_jackcess` 静态库。CMake 将受 Apache License 2.0 覆盖的两个空库模板嵌入静态库；运行时无需查找模板文件。调用方只链接 `rea_jackcess::core`；对象包不作为公开链接目标。新增包应先确定职责与依赖，再加入对象包列表。
 
@@ -43,11 +43,11 @@
 ```text
 api ──> query, metadata, index, catalog, write, value, page, format
 query ──> expression, index, metadata, catalog, value
-write ──> metadata, index, catalog, value, page, format
+write ──> metadata, index, catalog, value, page, format, util
 index ──> metadata, catalog, value, page, format
 metadata ──> catalog, value, format
 catalog ──> value, page, format
-value ──> page, format
+value ──> page, format, util
 page ──> format
 ```
 

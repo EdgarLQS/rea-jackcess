@@ -24,6 +24,7 @@ add_test(NAME page_writer COMMAND rea_jackcess_page_writer_tests)
 
 add_executable(rea_jackcess_database_create_tests database_create_test.cpp)
 target_link_libraries(rea_jackcess_database_create_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_database_create_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 add_test(NAME database_create COMMAND rea_jackcess_database_create_tests)
 
 add_executable(rea_jackcess_catalog_tests catalog_test.cpp)

@@ -1,7 +1,8 @@
 #include "jet4_table_creator.hpp"
-#include "jet4_byte_order.hpp"
+#include "jet4_fixed_numeric.hpp"
 #include "jet4_global_usage_map.hpp"
 
+#include "../util/little_endian.hpp"
 #include "../catalog/row_reader.hpp"
 #include "../catalog/system_catalog.hpp"
 #include "../catalog/table_definition.hpp"
@@ -41,8 +42,8 @@ constexpr std::uint64_t index_entry_data_offset = index_entry_mask_offset + inde
 constexpr std::uint64_t index_leaf_trailer_size = 4;
 constexpr std::uint32_t table_definition_magic = 0x659;
 constexpr std::uint8_t user_table_type = 0x4e;
-constexpr std::uint8_t long_type = 0x04;
-constexpr std::uint8_t short_type = 0x03;
+constexpr std::uint8_t short_type = jet4_short_type_code;
+constexpr std::uint8_t long_type = jet4_long_type_code;
 constexpr std::uint8_t date_type = 0x08;
 constexpr std::uint8_t text_type = 0x0a;
 constexpr std::uint8_t binary_type = 0x09;
@@ -133,8 +134,9 @@ void validate_table_builder(const std::filesystem::path& path, const TableBuilde
         validate_name(path,
                       column.name(),
                       "Column names currently support 1-64 ASCII letters, digits, spaces, and underscores");
-        if (column.type() != DataType::int32) {
-            unsupported_operation(path, "Initial Jet4 table creation currently supports LONG columns only");
+        if (jet4_fixed_numeric_type(column.type()) == nullptr) {
+            unsupported_operation(path,
+                                 "Initial Jet4 table creation currently supports BYTE, SHORT, LONG, SINGLE, and DOUBLE columns only");
         }
         if (std::any_of(names.begin(), names.end(), [&](std::string_view previous) {
                 return equals_ascii_case_insensitive(previous, column.name());
@@ -547,9 +549,14 @@ std::vector<std::uint8_t> build_table_definition_page(const std::filesystem::pat
     write_u24_le(page, 60, usage_map_page_number);
 
     std::uint64_t column_offset = table_definition_header_size;
+    std::uint64_t fixed_data_offset = 0;
     for (std::size_t index = 0; index < table.columns().size(); ++index) {
         const auto& column = table.columns()[index];
-        page[column_offset] = long_type;
+        const auto* storage = jet4_fixed_numeric_type(column.type());
+        if (storage == nullptr || fixed_data_offset > std::numeric_limits<std::uint16_t>::max()) {
+            unsupported_operation(path, "Jet4 table has an unsupported fixed-width column layout");
+        }
+        page[column_offset] = storage->jet_type_code;
         write_u32(page, column_offset + 1, table_definition_magic);
         write_u16(page, column_offset + 5, static_cast<std::uint16_t>(index));
         write_u16(page, column_offset + 7, 0);
@@ -560,8 +567,9 @@ std::vector<std::uint8_t> build_table_definition_page(const std::filesystem::pat
         page[column_offset + 15] = 0x03;
         page[column_offset + 16] = 0;
         write_u32(page, column_offset + 17, 0);
-        write_u16(page, column_offset + 21, static_cast<std::uint16_t>(index * 4));
-        write_u16(page, column_offset + 23, 4);
+        write_u16(page, column_offset + 21, static_cast<std::uint16_t>(fixed_data_offset));
+        write_u16(page, column_offset + 23, storage->byte_size);
+        fixed_data_offset += storage->byte_size;
         column_offset += column_definition_size;
     }
 

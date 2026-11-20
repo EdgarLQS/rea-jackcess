@@ -320,6 +320,26 @@ std::vector<RowId> Table::add_rows(const std::vector<std::vector<Value>>& rows) 
     return detail::append_jet4_rows(context, state.schema_index, rows);
 }
 
+void Table::update_row(RowId row_id, const std::vector<Value>& values) {
+    const auto& state = checked_state(state_);
+    detail::Jet4WriteContext context{state.database->file,
+                                     state.database->schema,
+                                     state.database->writable,
+                                     state.database->write_state_valid,
+                                     state.database->write_mutex};
+    detail::update_jet4_row(context, state.schema_index, row_id, values);
+}
+
+void Table::delete_row(RowId row_id) {
+    const auto& state = checked_state(state_);
+    detail::Jet4WriteContext context{state.database->file,
+                                     state.database->schema,
+                                     state.database->writable,
+                                     state.database->write_state_valid,
+                                     state.database->write_mutex};
+    detail::delete_jet4_row(context, state.schema_index, row_id);
+}
+
 Database::Database(std::shared_ptr<detail::DatabaseState> state) : state_(std::move(state)) {}
 
 Database Database::open(const std::filesystem::path& path) {

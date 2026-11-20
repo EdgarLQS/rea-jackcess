@@ -1,6 +1,6 @@
 #include "jet4_global_usage_map.hpp"
 
-#include "jet4_byte_order.hpp"
+#include "../util/little_endian.hpp"
 
 #include "../page/data_page.hpp"
 

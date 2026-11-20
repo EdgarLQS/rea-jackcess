@@ -12,9 +12,13 @@ int main(int argc, char** argv) {
     const bool single_table = argc == 3 && std::string(argv[2]) == "--single";
     const bool maximum_definition = argc == 3 && std::string(argv[2]) == "--maximum-definition";
     const bool batch_rows = argc == 3 && std::string(argv[2]) == "--batch-rows";
-    if (argc != 2 && !single_table && !maximum_definition && !batch_rows) {
+    const bool update_row = argc == 3 && std::string(argv[2]) == "--update-row";
+    const bool delete_row = argc == 3 && std::string(argv[2]) == "--delete-row";
+    const bool fixed_numeric_rows = argc == 3 && std::string(argv[2]) == "--fixed-numeric-rows";
+    const bool writes_rows = batch_rows || update_row || delete_row || fixed_numeric_rows;
+    if (argc != 2 && !single_table && !maximum_definition && !writes_rows) {
         std::cerr << "Usage: create_tables_for_jackcess_check <database.mdb> "
-                     "[--single|--maximum-definition|--batch-rows]\n";
+                     "[--single|--maximum-definition|--batch-rows|--update-row|--delete-row|--fixed-numeric-rows]\n";
         return 2;
     }
 
@@ -30,7 +34,15 @@ int main(int argc, char** argv) {
         batch_table.add_column("Id", rea_jackcess::DataType::int32)
             .add_column("GroupId", rea_jackcess::DataType::int32);
 
-        std::vector<rea_jackcess::TableBuilder> tables{batch_rows ? batch_table : first_table};
+        rea_jackcess::TableBuilder fixed_numeric_table("T");
+        fixed_numeric_table.add_column("ByteValue", rea_jackcess::DataType::byte)
+            .add_column("ShortValue", rea_jackcess::DataType::int16)
+            .add_column("LongValue", rea_jackcess::DataType::int32)
+            .add_column("SingleValue", rea_jackcess::DataType::float32)
+            .add_column("DoubleValue", rea_jackcess::DataType::float64);
+
+        std::vector<rea_jackcess::TableBuilder> tables{
+            fixed_numeric_rows ? fixed_numeric_table : (writes_rows ? batch_table : first_table)};
         if (!single_table) {
             if (maximum_definition) {
                 rea_jackcess::TableBuilder large_table("Large");
@@ -39,7 +51,7 @@ int main(int argc, char** argv) {
                                            rea_jackcess::DataType::int32);
                 }
                 tables = {large_table};
-            } else if (!batch_rows) {
+            } else if (!writes_rows) {
                 tables.push_back(second_table);
             }
         }
@@ -54,7 +66,7 @@ int main(int argc, char** argv) {
                       << std::string(argv[1]) << '\n';
         }
 
-        if (batch_rows) {
+        if (writes_rows) {
             auto database = rea_jackcess::Database::open(
                 argv[1], rea_jackcess::DatabaseOpenMode::read_write);
             auto tables_after_open = database.tables();
@@ -66,17 +78,40 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("Read-write reopen did not discover table T");
             }
 
-            std::vector<std::vector<rea_jackcess::Value>> rows;
-            rows.reserve(500);
-            for (std::int32_t value = 0; value < 500; ++value) {
-                rows.push_back({value, value + 1000});
+            if (fixed_numeric_rows) {
+                const auto row_ids = table->add_rows({
+                    {std::int8_t{-128}, std::int16_t{-32768}, std::int32_t{-2147483647 - 1}, -1.25F, 1.0 / 3.0},
+                    {std::int8_t{127}, std::int16_t{32767}, std::int32_t{2147483647}, 3.5F, 2.5},
+                    {std::int8_t{1}, std::int16_t{-10}, std::int32_t{100}, 0.25F, 42.0},
+                });
+                table->update_row(row_ids.back(),
+                                  {std::int8_t{-1}, std::int16_t{0}, std::int32_t{123456}, 12.5F, -0.5});
+                std::cout << "Wrote fixed BYTE, SHORT, LONG, SINGLE, and DOUBLE rows\n";
+            } else if (batch_rows) {
+                std::vector<std::vector<rea_jackcess::Value>> rows;
+                rows.reserve(500);
+                for (std::int32_t value = 0; value < 500; ++value) {
+                    rows.push_back({value, value + 1000});
+                }
+                const auto row_ids = table->add_rows(rows);
+                if (row_ids.size() != rows.size()) {
+                    throw std::runtime_error("Batch insertion returned the wrong RowId count");
+                }
+                (void)table->add_row({std::int32_t{501}, std::monostate{}});
+                std::cout << "Inserted 500 rows across Jet4 data pages and one nullable row\n";
+            } else if (update_row) {
+                const auto row_id = table->add_row({std::int32_t{10}, std::int32_t{20}});
+                table->update_row(row_id, {std::int32_t{11}, std::monostate{}});
+                std::cout << "Updated one fixed-width Jet4 row in place\n";
+            } else {
+                const auto row_ids = table->add_rows({
+                    {std::int32_t{1}, std::int32_t{10}},
+                    {std::int32_t{2}, std::int32_t{20}},
+                    {std::int32_t{3}, std::int32_t{30}},
+                });
+                table->delete_row(row_ids[1]);
+                std::cout << "Deleted one Jet4 row and retained the surrounding rows\n";
             }
-            const auto row_ids = table->add_rows(rows);
-            if (row_ids.size() != rows.size()) {
-                throw std::runtime_error("Batch insertion returned the wrong RowId count");
-            }
-            (void)table->add_row({std::int32_t{501}, std::monostate{}});
-            std::cout << "Inserted 500 rows across Jet4 data pages and one nullable row\n";
         }
         return 0;
     } catch (const std::exception& error) {

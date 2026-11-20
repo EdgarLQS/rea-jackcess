@@ -96,7 +96,6 @@ rea_jackcess_add_package(index
 )
 
 rea_jackcess_add_package(write
-    write/jet4_byte_order.hpp
     write/jet4_database_creator.cpp
     write/jet4_database_creator.hpp
     write/jet4_global_usage_map.cpp
@@ -110,5 +109,6 @@ rea_jackcess_add_package(write
 )
 
 rea_jackcess_add_package(util
+    util/little_endian.hpp
     util/sha256.cpp
 )

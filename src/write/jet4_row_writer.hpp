@@ -23,4 +23,11 @@ std::vector<RowId> append_jet4_rows(Jet4WriteContext& context,
                                     std::size_t table_index,
                                     const std::vector<std::vector<Value>>& rows);
 
+void update_jet4_row(Jet4WriteContext& context,
+                     std::size_t table_index,
+                     RowId row_id,
+                     const std::vector<Value>& values);
+
+void delete_jet4_row(Jet4WriteContext& context, std::size_t table_index, RowId row_id);
+
 }

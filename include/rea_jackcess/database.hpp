@@ -41,7 +41,8 @@ public:
     static Database create(const std::filesystem::path& path, DatabaseFormat format);
 
     // Creates a Jet4 V2000 database with the supplied empty table schemas, then opens it for reading.
-    // Current schema writing supports LONG columns whose definition fits one page, and 1-64 character ASCII names
+    // Current schema writing supports fixed BYTE/SHORT/LONG/SINGLE/DOUBLE columns whose definition fits one page,
+    // and 1-64 character ASCII names
     // containing letters, digits, spaces, or underscores.
     // The returned Database handle remains read-only.
     static Database create(const std::filesystem::path& path,
