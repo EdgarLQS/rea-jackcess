@@ -35,3 +35,14 @@ target_include_directories(rea_jackcess_catalog_tests PRIVATE
     "${PROJECT_SOURCE_DIR}/tools/cli"
 )
 add_test(NAME catalog COMMAND rea_jackcess_catalog_tests)
+
+# The PGeo sample is intentionally untracked; only register the real-file regression
+# when a local copy exists, so the default test suite stays self-contained.
+set(REA_JACKCESS_PGEO_SAMPLE "${PROJECT_SOURCE_DIR}/test_data_only_read/test_mdb.mdb")
+if(EXISTS "${REA_JACKCESS_PGEO_SAMPLE}")
+    add_executable(rea_jackcess_real_sample_tests real_sample_test.cpp)
+    target_link_libraries(rea_jackcess_real_sample_tests PRIVATE rea_jackcess::core)
+    target_include_directories(rea_jackcess_real_sample_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME real_sample_boolean
+        COMMAND rea_jackcess_real_sample_tests "${REA_JACKCESS_PGEO_SAMPLE}")
+endif()

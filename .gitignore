@@ -1,3 +1,4 @@
 .DS_Store
 /build/
 /test_data_only_read
+.workbuddy/

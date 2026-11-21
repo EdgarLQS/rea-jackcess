@@ -135,9 +135,10 @@ void validate_table_builder(const std::filesystem::path& path, const TableBuilde
         validate_name(path,
                       column.name(),
                       "Column names currently support 1-64 ASCII letters, digits, spaces, and underscores");
-        if (jet4_fixed_type(column.type()) == nullptr && jet4_variable_type(column.type()) == nullptr) {
+        if (jet4_fixed_type(column.type()) == nullptr && jet4_variable_type(column.type()) == nullptr &&
+            !jet4_is_boolean_type(column.type())) {
             unsupported_operation(path,
-                                 "Initial Jet4 table creation currently supports BYTE, SHORT, LONG, MONEY, SINGLE, DOUBLE, GUID, TEXT, BINARY, MEMO, and OLE columns only");
+                                 "Initial Jet4 table creation currently supports BOOLEAN, BYTE, SHORT, LONG, MONEY, SINGLE, DOUBLE, GUID, TEXT, BINARY, MEMO, and OLE columns only");
         }
         if (std::any_of(names.begin(), names.end(), [&](std::string_view previous) {
                 return equals_ascii_case_insensitive(previous, column.name());
@@ -567,20 +568,24 @@ std::vector<std::uint8_t> build_table_definition_page(const std::filesystem::pat
         }));
     for (std::size_t index = 0; index < table.columns().size(); ++index) {
         const auto& column = table.columns()[index];
+        const bool boolean_column = jet4_is_boolean_type(column.type());
         const auto* storage = jet4_fixed_type(column.type());
         const auto* variable_storage = jet4_variable_type(column.type());
-        if ((storage == nullptr) == (variable_storage == nullptr)) {
+        if (!boolean_column && (storage == nullptr) == (variable_storage == nullptr)) {
             unsupported_operation(path, "Jet4 table has an unsupported column storage layout");
         }
         if (fixed_data_offset > std::numeric_limits<std::uint16_t>::max()) {
             unsupported_operation(path, "Jet4 table fixed data layout exceeds the format limit");
         }
-        const std::uint16_t variable_index = storage != nullptr
-                                                 ? 0
-                                                 : (jet4_is_long_value_type(column.type())
-                                                        ? long_value_table_index++
-                                                        : variable_table_index++);
-        page[column_offset] = storage != nullptr ? storage->jet_type_code : variable_storage->jet_type_code;
+        const std::uint16_t variable_index =
+            storage != nullptr
+                ? 0
+                : (jet4_is_long_value_type(column.type())
+                       ? long_value_table_index++
+                       : (variable_storage != nullptr ? variable_table_index++ : 0));
+        page[column_offset] = boolean_column
+                                  ? jet4_boolean_type_code
+                                  : (storage != nullptr ? storage->jet_type_code : variable_storage->jet_type_code);
         write_u32(page, column_offset + 1, table_definition_magic);
         write_u16(page, column_offset + 5, static_cast<std::uint16_t>(index));
         write_u16(page, column_offset + 7, variable_index);
@@ -588,13 +593,16 @@ std::vector<std::uint8_t> build_table_definition_page(const std::filesystem::pat
         page[column_offset + 11] = 0;
         page[column_offset + 12] = 0;
         write_u16(page, column_offset + 13, 0);
-        page[column_offset + 15] = storage != nullptr ? 0x03 : 0x02;
+        page[column_offset + 15] = boolean_column || storage != nullptr ? 0x03 : 0x02;
         page[column_offset + 16] = 0;
         write_u32(page, column_offset + 17, 0);
         write_u16(page,
                   column_offset + 21,
                   storage != nullptr ? static_cast<std::uint16_t>(fixed_data_offset) : 0);
-        const std::uint16_t column_size = storage != nullptr ? storage->byte_size : variable_storage->maximum_byte_size;
+        const std::uint16_t column_size =
+            boolean_column
+                ? 1
+                : (storage != nullptr ? storage->byte_size : variable_storage->maximum_byte_size);
         write_u16(page, column_offset + 23, column_size);
         if (storage != nullptr) {
             fixed_data_offset += storage->byte_size;
@@ -743,8 +751,8 @@ void create_jet4_table(const std::filesystem::path& path,
                        DatabaseFormat format,
                        const TableBuilder& table) {
     validate_table_builder(path, table);
-    if (format != DatabaseFormat::v2000) {
-        unsupported_operation(path, "Initial table schema creation currently supports V2000 files only");
+    if (format != DatabaseFormat::v2000 && format != DatabaseFormat::v2003) {
+        unsupported_operation(path, "Initial table schema creation currently supports Jet4 V2000 and V2003 files only");
     }
 
     std::vector<std::pair<std::uint64_t, std::vector<std::uint8_t>>> page_updates;

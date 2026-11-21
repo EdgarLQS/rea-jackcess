@@ -9,24 +9,29 @@
 #include <vector>
 
 int main(int argc, char** argv) {
-    const bool single_table = argc == 3 && std::string(argv[2]) == "--single";
-    const bool maximum_definition = argc == 3 && std::string(argv[2]) == "--maximum-definition";
-    const bool batch_rows = argc == 3 && std::string(argv[2]) == "--batch-rows";
-    const bool update_row = argc == 3 && std::string(argv[2]) == "--update-row";
-    const bool delete_row = argc == 3 && std::string(argv[2]) == "--delete-row";
-    const bool fixed_numeric_rows = argc == 3 && std::string(argv[2]) == "--fixed-numeric-rows";
-    const bool money_rows = argc == 3 && std::string(argv[2]) == "--money-rows";
-    const bool money_empty = argc == 3 && std::string(argv[2]) == "--money-empty";
-    const bool guid_rows = argc == 3 && std::string(argv[2]) == "--guid-rows";
-    const bool variable_row_growth = argc == 3 && std::string(argv[2]) == "--variable-rows-growth";
-    const bool variable_row_shrink = argc == 3 && std::string(argv[2]) == "--variable-rows";
+    const std::string mode = argc >= 3 ? argv[2] : std::string{};
+    const bool single_table = mode == "--single";
+    const bool maximum_definition = mode == "--maximum-definition";
+    const bool batch_rows = mode == "--batch-rows";
+    const bool update_row = mode == "--update-row";
+    const bool delete_row = mode == "--delete-row";
+    const bool fixed_numeric_rows = mode == "--fixed-numeric-rows";
+    const bool money_rows = mode == "--money-rows";
+    const bool money_empty = mode == "--money-empty";
+    const bool guid_rows = mode == "--guid-rows";
+    const bool boolean_rows = mode == "--boolean-rows";
+    const bool boolean_empty = mode == "--boolean-empty";
+    const bool variable_row_growth = mode == "--variable-rows-growth";
+    const bool variable_row_shrink = mode == "--variable-rows";
     const bool variable_rows = variable_row_growth || variable_row_shrink;
-    const bool long_value_rows = argc == 3 && std::string(argv[2]) == "--long-value-rows";
+    const bool long_value_rows = mode == "--long-value-rows";
     const bool writes_rows = batch_rows || update_row || delete_row || fixed_numeric_rows ||
-                             money_rows || guid_rows || variable_rows || long_value_rows;
-    if (argc != 2 && !single_table && !maximum_definition && !writes_rows && !money_empty) {
+                             money_rows || guid_rows || boolean_rows || variable_rows || long_value_rows;
+    const bool v2003 = argc == 4 && std::string(argv[3]) == "--v2003";
+    if (argc > 4 || (argc >= 3 && !single_table && !maximum_definition && !writes_rows &&
+                     !money_empty && !boolean_empty)) {
         std::cerr << "Usage: create_tables_for_jackcess_check <database.mdb> "
-                     "[--single|--maximum-definition|--batch-rows|--update-row|--delete-row|--fixed-numeric-rows|--money-rows|--money-empty|--guid-rows|--variable-rows-growth|--variable-rows|--long-value-rows]\n";
+                     "[--single|--maximum-definition|--batch-rows|--update-row|--delete-row|--fixed-numeric-rows|--money-rows|--money-empty|--guid-rows|--boolean-rows|--boolean-empty|--variable-rows-growth|--variable-rows|--long-value-rows] [--v2003]\n";
         return 2;
     }
 
@@ -56,6 +61,12 @@ int main(int argc, char** argv) {
         guid_table.add_column("Id", rea_jackcess::DataType::int32)
             .add_column("Uuid", rea_jackcess::DataType::guid);
 
+        rea_jackcess::TableBuilder boolean_table("Booleans");
+        boolean_table.add_column("Id", rea_jackcess::DataType::int32)
+            .add_column("Flag", rea_jackcess::DataType::boolean)
+            .add_column("Maybe", rea_jackcess::DataType::boolean)
+            .add_column("Tail", rea_jackcess::DataType::int32);
+
         rea_jackcess::TableBuilder variable_table("Variable");
         variable_table.add_column("Id", rea_jackcess::DataType::int32)
             .add_column("Name", rea_jackcess::DataType::text)
@@ -68,15 +79,23 @@ int main(int argc, char** argv) {
             .add_column("Note", rea_jackcess::DataType::text)
             .add_column("Payload", rea_jackcess::DataType::ole);
 
-        std::vector<rea_jackcess::TableBuilder> tables{
-            long_value_rows ? long_value_table
-                            : (variable_rows ? variable_table
-                                             : (fixed_numeric_rows ? fixed_numeric_table
-                                                                   : ((money_rows || money_empty)
-                                                                          ? money_table
-                                                                          : (guid_rows ? guid_table
-                                                                                       : (writes_rows ? batch_table
-                                                                                                      : first_table))))};
+        rea_jackcess::TableBuilder* selected_table = &first_table;
+        if (long_value_rows) {
+            selected_table = &long_value_table;
+        } else if (variable_rows) {
+            selected_table = &variable_table;
+        } else if (fixed_numeric_rows) {
+            selected_table = &fixed_numeric_table;
+        } else if (money_rows || money_empty) {
+            selected_table = &money_table;
+        } else if (guid_rows) {
+            selected_table = &guid_table;
+        } else if (boolean_rows || boolean_empty) {
+            selected_table = &boolean_table;
+        } else if (writes_rows) {
+            selected_table = &batch_table;
+        }
+        std::vector<rea_jackcess::TableBuilder> tables{*selected_table};
         if (!single_table) {
             if (maximum_definition) {
                 rea_jackcess::TableBuilder large_table("Large");
@@ -85,13 +104,14 @@ int main(int argc, char** argv) {
                                            rea_jackcess::DataType::int32);
                 }
                 tables = {large_table};
-            } else if (!writes_rows && !money_empty) {
+            } else if (!writes_rows && !money_empty && !boolean_empty) {
                 tables.push_back(second_table);
             }
         }
         {
-            const auto database = rea_jackcess::Database::create(
-                argv[1], rea_jackcess::DatabaseFormat::v2000, tables);
+            const auto format = v2003 ? rea_jackcess::DatabaseFormat::v2003
+                                      : rea_jackcess::DatabaseFormat::v2000;
+            const auto database = rea_jackcess::Database::create(argv[1], format, tables);
             std::size_t user_table_count = 0;
             for (const auto& table : database.tables()) {
                 user_table_count += table.is_user_table() ? 1 : 0;
@@ -108,7 +128,9 @@ int main(int argc, char** argv) {
                                                         ? "LongValues"
                                                         : (variable_rows ? "Variable"
                                                                          : (money_rows ? "MoneyValues"
-                                                                                       : (guid_rows ? "Guids" : "T")));
+                                                                                       : (guid_rows ? "Guids"
+                                                                                                    : (boolean_rows ? "Booleans"
+                                                                                                                    : "T"))));
             const auto table = std::find_if(tables_after_open.begin(), tables_after_open.end(),
                                             [&](const auto& candidate) {
                                                 return candidate.name() == expected_table_name;
@@ -156,6 +178,15 @@ int main(int argc, char** argv) {
                                   {std::int32_t{1},
                                    rea_jackcess::GuidValue{"{fedcba98-7654-3210-fedc-ba9876543210}"}});
                 std::cout << "Wrote and updated fixed-width GUID values\n";
+            } else if (boolean_rows) {
+                const auto row_ids = table->add_rows({
+                    {std::int32_t{1}, true, false, std::int32_t{10}},
+                    {std::int32_t{2}, false, true, std::int32_t{-5}},
+                    {std::int32_t{3}, std::monostate{}, std::monostate{}, std::int32_t{0}},
+                });
+                table->update_row(row_ids.front(),
+                                  {std::int32_t{1}, false, false, std::int32_t{11}});
+                std::cout << "Wrote and updated Jet4 BOOLEAN bit values, including a NULL row\n";
             } else if (variable_rows) {
                 const auto row_ids = table->add_rows({
                     {std::int32_t{1}, std::string("A"), rea_jackcess::BlobValue{{0, 0x7f, 0xff}}, std::string("🔥")},

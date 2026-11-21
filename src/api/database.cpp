@@ -371,9 +371,9 @@ Database Database::create(const std::filesystem::path& path, DatabaseFormat form
 Database Database::create(const std::filesystem::path& path,
                            DatabaseFormat format,
                            const std::vector<TableBuilder>& tables) {
-    if (!tables.empty() && format != DatabaseFormat::v2000) {
+    if (!tables.empty() && format != DatabaseFormat::v2000 && format != DatabaseFormat::v2003) {
         throw DatabaseError(DatabaseErrorCode::unsupported_operation,
-                            "Initial table schema creation currently supports V2000 files only",
+                            "Initial table schema creation currently supports Jet4 V2000 and V2003 files only",
                             path);
     }
 

@@ -173,6 +173,16 @@ std::uint64_t fixed_row_data_size(const PageFile& file,
                                      column,
                                      "Row writing requires contiguous column numbers");
         }
+        if (jet4_is_boolean_type(column.type)) {
+            // BOOLEAN values live in the row NULL mask and occupy no fixed data bytes.
+            if ((column.flags & 0x01) == 0 || column.length != 1 || column.fixed_data_offset != 0) {
+                unsupported_column_write(file,
+                                         table,
+                                         column,
+                                         "BOOLEAN column has an unsupported Jet4 storage layout");
+            }
+            continue;
+        }
         const auto* fixed_type = jet4_fixed_type(column.type);
         const auto* variable_type = jet4_variable_type(column.type);
         if ((fixed_type == nullptr) == (variable_type == nullptr)) {
@@ -585,10 +595,12 @@ void validate_unindexed_local_table(const PageFile& file,
                                                          *database_properties->property_bytes,
                                                          "AccessVersion")
                                     : std::nullopt;
-    if (!access_version || *access_version != "08.50") {
+    // V2000 templates carry AccessVersion 08.50 and V2003 templates 09.50; both share the
+    // Jet4 row layout, so the writer accepts either marker and rejects everything else.
+    if (!access_version || (*access_version != "08.50" && *access_version != "09.50")) {
         unsupported_table_write(file,
                                 table.name,
-                                "Row modification currently supports Jet4 V2000 databases only");
+                                "Row modification currently supports Jet4 V2000 and V2003 databases only");
     }
     if (!definition.indexes.empty() || !definition.physical_indexes.empty()) {
         unsupported_table_write(file,
@@ -644,6 +656,20 @@ EncodedRow encode_row(const PageFile& file,
                                     file.path(),
                                     table.definition_page_number,
                                     std::move(context));
+            }
+            continue;
+        }
+
+        if (jet4_is_boolean_type(column.type)) {
+            // A BOOLEAN is stored as a single NULL mask bit: set means TRUE, clear means FALSE.
+            // Jet cannot distinguish a NULL boolean from FALSE, so both encode identically.
+            const auto* boolean_value = std::get_if<bool>(&value);
+            if (boolean_value == nullptr) {
+                invalid_column_value(file, table, column, "Row value does not match its BOOLEAN column type");
+            }
+            if (*boolean_value) {
+                null_mask[column.column_number / 8] |=
+                    static_cast<std::uint8_t>(1u << (column.column_number % 8));
             }
             continue;
         }

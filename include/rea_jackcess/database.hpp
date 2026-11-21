@@ -40,8 +40,8 @@ public:
     // Concurrent calls to either create overload targeting the same path must be serialized by the caller.
     static Database create(const std::filesystem::path& path, DatabaseFormat format);
 
-    // Creates a Jet4 V2000 database with the supplied empty table schemas, then opens it for reading.
-    // Current schema writing supports BYTE/SHORT/LONG/MONEY/SINGLE/DOUBLE/GUID/TEXT/BINARY/MEMO/OLE columns whose definition
+    // Creates a Jet4 V2000 or V2003 database with the supplied empty table schemas, then opens it for reading.
+    // Current schema writing supports BOOLEAN/BYTE/SHORT/LONG/MONEY/SINGLE/DOUBLE/GUID/TEXT/BINARY/MEMO/OLE columns whose definition
     // fits one page (MONEY uses four decimal places; TEXT defaults to 255 UTF-16 characters and BINARY to 255 bytes),
     // and 1-64 character ASCII names containing letters, digits, spaces, or underscores.
     // The returned Database handle remains read-only.

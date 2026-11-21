@@ -620,6 +620,250 @@ void test_create_and_write_money_columns(const TemporaryDirectory& directory) {
     check(!rows.next(), "reopened MONEY table returned an unexpected extra row");
 }
 
+void test_create_and_write_boolean_columns(const TemporaryDirectory& directory) {
+    const auto path = directory.file("boolean-rows.mdb");
+    rea_jackcess::TableBuilder table_builder("Booleans");
+    table_builder.add_column("Id", rea_jackcess::DataType::int32)
+        .add_column("Flag", rea_jackcess::DataType::boolean)
+        .add_column("Maybe", rea_jackcess::DataType::boolean)
+        .add_column("Tail", rea_jackcess::DataType::int32);
+    {
+        const auto created = rea_jackcess::Database::create(
+            path,
+            rea_jackcess::DatabaseFormat::v2000,
+            std::vector<rea_jackcess::TableBuilder>{table_builder});
+        const auto tables = created.tables();
+        const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "Booleans";
+        });
+        check(table != tables.end() && table->columns().size() == 4,
+              "new BOOLEAN table did not preserve its four-column schema");
+        const auto& flag = table->columns()[1];
+        const auto& maybe = table->columns()[2];
+        check(flag.type == rea_jackcess::DataType::boolean && flag.fixed && flag.size == 1 &&
+                  flag.raw_type_code == 0x01 && flag.nullable == std::optional<bool>(true),
+              "new BOOLEAN column did not carry the Jet4 bit layout");
+        check(maybe.type == rea_jackcess::DataType::boolean && maybe.fixed && maybe.size == 1,
+              "second BOOLEAN column did not keep the Jet4 bit layout");
+        check(!table->rows().next(), "new BOOLEAN table unexpectedly contains rows");
+    }
+
+    rea_jackcess::RowId first_row_id{};
+    rea_jackcess::RowId second_row_id{};
+    {
+        auto writable = rea_jackcess::Database::open(path, rea_jackcess::DatabaseOpenMode::read_write);
+        auto tables = writable.tables();
+        const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "Booleans";
+        });
+        check(table != tables.end(), "read-write database did not expose table Booleans");
+
+        const auto row_ids = table->add_rows({
+            {std::int32_t{1}, true, false, std::int32_t{10}},
+            {std::int32_t{2}, false, true, std::int32_t{-5}},
+            {std::int32_t{3}, std::monostate{}, std::monostate{}, std::int32_t{0}},
+        });
+        check(row_ids.size() == 3 && table->row_count_header() == 3,
+              "BOOLEAN batch insertion returned the wrong row count");
+        first_row_id = row_ids[0];
+        second_row_id = row_ids[1];
+
+        auto rows = table->rows();
+        const auto first = rows.next();
+        check(first && first->id() == first_row_id && std::get<bool>(first->at(1)) &&
+                  !std::get<bool>(first->at(2)) && std::get<std::int32_t>(first->at(3)) == 10,
+              "BOOLEAN TRUE/FALSE encoding changed the stored row");
+        const auto second = rows.next();
+        check(second && !std::get<bool>(second->at(1)) && std::get<bool>(second->at(2)),
+              "BOOLEAN FALSE/TRUE encoding changed the stored row");
+        const auto third = rows.next();
+        check(third && !std::get<bool>(third->at(1)) && !std::get<bool>(third->at(2)) &&
+                  std::get<std::int32_t>(third->at(3)) == 0,
+              "a NULL BOOLEAN did not read back as FALSE");
+        check(!rows.next(), "BOOLEAN batch insertion returned an unexpected extra row");
+
+        const auto before_invalid_write = read_bytes(path);
+        expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+            (void)table->add_row(
+                {std::int32_t{4}, std::int32_t{1}, false, std::int32_t{0}});
+        });
+        check(read_bytes(path) == before_invalid_write,
+              "a mismatched BOOLEAN value type changed the database before validation failed");
+
+        table->update_row(first_row_id,
+                          {std::int32_t{1}, false, false, std::int32_t{11}});
+        table->update_row(second_row_id,
+                          {std::int32_t{2}, true, true, std::int32_t{-5}});
+        check(table->row_count_header() == 3, "BOOLEAN update changed the table row count");
+        auto updated_rows = table->rows();
+        const auto updated_first = updated_rows.next();
+        check(updated_first && updated_first->id() == first_row_id &&
+                  !std::get<bool>(updated_first->at(1)) &&
+                  std::get<std::int32_t>(updated_first->at(3)) == 11,
+              "BOOLEAN update did not clear the TRUE bit or preserve the neighbouring LONG");
+        const auto updated_second = updated_rows.next();
+        check(updated_second && updated_second->id() == second_row_id &&
+                  std::get<bool>(updated_second->at(1)) && std::get<bool>(updated_second->at(2)),
+              "BOOLEAN update did not set the TRUE bits");
+    }
+
+    auto reopened = rea_jackcess::Database::open(path);
+    const auto tables = reopened.tables();
+    const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+        return candidate.name() == "Booleans";
+    });
+    check(table != tables.end() && table->row_count_header() == 3,
+          "reopened BOOLEAN table has an incorrect row count");
+    const std::vector<std::pair<bool, bool>> expected{{false, false}, {true, true}, {false, false}};
+    auto rows = table->rows();
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+        const auto row = rows.next();
+        check(row && std::get<bool>(row->at(1)) == expected[index].first &&
+                  std::get<bool>(row->at(2)) == expected[index].second,
+              "reopened BOOLEAN table did not preserve its bit values");
+    }
+    check(!rows.next(), "reopened BOOLEAN table returned an unexpected extra row");
+}
+
+void test_boolean_columns_across_null_mask_bytes(const TemporaryDirectory& directory) {
+    const auto path = directory.file("boolean-wide-rows.mdb");
+    rea_jackcess::TableBuilder table_builder("Wide");
+    for (int index = 0; index < 8; ++index) {
+        table_builder.add_column("C" + std::to_string(index), rea_jackcess::DataType::int32);
+    }
+    table_builder.add_column("Flag", rea_jackcess::DataType::boolean)
+        .add_column("Tail", rea_jackcess::DataType::int32);
+    {
+        const auto created = rea_jackcess::Database::create(
+            path,
+            rea_jackcess::DatabaseFormat::v2000,
+            std::vector<rea_jackcess::TableBuilder>{table_builder});
+        (void)created;
+    }
+
+    {
+        auto writable = rea_jackcess::Database::open(path, rea_jackcess::DatabaseOpenMode::read_write);
+        auto tables = writable.tables();
+        const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "Wide";
+        });
+        check(table != tables.end() && table->columns().size() == 10,
+              "read-write database did not expose the wide BOOLEAN table");
+        (void)table->add_rows({
+            {std::int32_t{10}, std::int32_t{11}, std::int32_t{12}, std::int32_t{13},
+             std::int32_t{14}, std::int32_t{15}, std::int32_t{16}, std::int32_t{17}, true,
+             std::int32_t{99}},
+            {std::int32_t{20}, std::int32_t{21}, std::int32_t{22}, std::int32_t{23},
+             std::int32_t{24}, std::int32_t{25}, std::int32_t{26}, std::int32_t{27}, false,
+             std::int32_t{98}},
+        });
+    }
+
+    auto reopened = rea_jackcess::Database::open(path);
+    const auto tables = reopened.tables();
+    const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+        return candidate.name() == "Wide";
+    });
+    check(table != tables.end(), "reopened database did not expose the wide BOOLEAN table");
+    auto rows = table->rows();
+    const auto first = rows.next();
+    check(first && std::get<bool>(first->at(8)) && std::get<std::int32_t>(first->at(9)) == 99 &&
+              std::get<std::int32_t>(first->at(0)) == 10,
+          "a BOOLEAN in the second NULL mask byte did not read back as TRUE");
+    const auto second = rows.next();
+    check(second && !std::get<bool>(second->at(8)) && std::get<std::int32_t>(second->at(9)) == 98,
+          "a FALSE BOOLEAN in the second NULL mask byte set an unexpected bit");
+    check(!rows.next(), "wide BOOLEAN table returned an unexpected extra row");
+}
+
+void test_boolean_only_table(const TemporaryDirectory& directory) {
+    const auto path = directory.file("boolean-only-rows.mdb");
+    rea_jackcess::TableBuilder table_builder("OnlyFlag");
+    table_builder.add_column("Flag", rea_jackcess::DataType::boolean);
+    {
+        const auto created = rea_jackcess::Database::create(
+            path,
+            rea_jackcess::DatabaseFormat::v2000,
+            std::vector<rea_jackcess::TableBuilder>{table_builder});
+        (void)created;
+    }
+
+    {
+        auto writable = rea_jackcess::Database::open(path, rea_jackcess::DatabaseOpenMode::read_write);
+        auto tables = writable.tables();
+        const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "OnlyFlag";
+        });
+        check(table != tables.end(), "read-write database did not expose table OnlyFlag");
+        (void)table->add_rows({{true}, {false}, {std::monostate{}}});
+        check(table->row_count_header() == 3, "boolean-only table did not accept three rows");
+    }
+
+    auto reopened = rea_jackcess::Database::open(path);
+    const auto tables = reopened.tables();
+    const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+        return candidate.name() == "OnlyFlag";
+    });
+    check(table != tables.end(), "reopened database did not expose table OnlyFlag");
+    const std::vector<bool> expected{true, false, false};
+    auto rows = table->rows();
+    for (const bool value : expected) {
+        const auto row = rows.next();
+        check(row && std::get<bool>(row->at(0)) == value,
+              "boolean-only table did not preserve its bit values");
+    }
+    check(!rows.next(), "boolean-only table returned an unexpected extra row");
+}
+
+void test_boolean_with_long_value_columns(const TemporaryDirectory& directory) {
+    const auto path = directory.file("boolean-long-value-rows.mdb");
+    rea_jackcess::TableBuilder table_builder("Mixed");
+    table_builder.add_column("Flag", rea_jackcess::DataType::boolean)
+        .add_column("Memo", rea_jackcess::DataType::memo)
+        .add_column("Tail", rea_jackcess::DataType::int32);
+    {
+        const auto created = rea_jackcess::Database::create(
+            path,
+            rea_jackcess::DatabaseFormat::v2000,
+            std::vector<rea_jackcess::TableBuilder>{table_builder});
+        (void)created;
+    }
+
+    {
+        auto writable = rea_jackcess::Database::open(path, rea_jackcess::DatabaseOpenMode::read_write);
+        auto tables = writable.tables();
+        const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "Mixed";
+        });
+        check(table != tables.end(), "read-write database did not expose table Mixed");
+        const auto row_ids = table->add_rows({
+            {true, rea_jackcess::MemoValue{std::string(12000, 'M'), {}}, std::int32_t{7}},
+            {false, rea_jackcess::MemoValue{"", {}}, std::int32_t{-7}},
+        });
+        table->update_row(row_ids.front(),
+                          {false, rea_jackcess::MemoValue{std::string(20000, 'U'), {}},
+                           std::int32_t{7}});
+    }
+
+    auto reopened = rea_jackcess::Database::open(path);
+    const auto tables = reopened.tables();
+    const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+        return candidate.name() == "Mixed";
+    });
+    check(table != tables.end(), "reopened database did not expose table Mixed");
+    auto rows = table->rows();
+    const auto first = rows.next();
+    check(first && !std::get<bool>(first->at(0)) &&
+              std::get<rea_jackcess::MemoValue>(first->at(1)).text.size() == 20000 &&
+              std::get<std::int32_t>(first->at(2)) == 7,
+          "a BOOLEAN next to a MEMO column corrupted the long-value layout");
+    const auto second = rows.next();
+    check(second && !std::get<bool>(second->at(0)) &&
+              std::get<rea_jackcess::MemoValue>(second->at(1)).text.empty(),
+          "a FALSE BOOLEAN next to an empty MEMO did not read back correctly");
+    check(!rows.next(), "mixed BOOLEAN/MEMO table returned an unexpected extra row");
+}
+
 void test_add_rows_with_text_and_binary_columns(const TemporaryDirectory& directory) {
     const auto path = directory.file("variable-rows.mdb");
     rea_jackcess::TableBuilder table_builder("Variable");
@@ -1027,9 +1271,116 @@ void test_later_oversized_batch_row_is_rejected(const TemporaryDirectory& direct
           "a later oversized row in a batch modified the database before rejection");
 }
 
-void test_v2003_row_writes_are_rejected(const TemporaryDirectory& directory) {
+void test_v2003_table_and_row_writes(const TemporaryDirectory& directory) {
+    const auto path = directory.file("v2003-typed-rows.mdb");
+    rea_jackcess::TableBuilder typed_table("Typed");
+    typed_table.add_column("Id", rea_jackcess::DataType::int32)
+        .add_column("Flag", rea_jackcess::DataType::boolean)
+        .add_column("Name", rea_jackcess::DataType::text)
+        .add_column("Note", rea_jackcess::DataType::memo)
+        .add_column("Amount", rea_jackcess::DataType::money);
+    rea_jackcess::TableBuilder second_table("Second");
+    second_table.add_column("Code", rea_jackcess::DataType::int32);
+    {
+        const auto created = rea_jackcess::Database::create(
+            path,
+            rea_jackcess::DatabaseFormat::v2003,
+            std::vector<rea_jackcess::TableBuilder>{typed_table, second_table});
+        const auto tables = created.tables();
+        const auto typed = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "Typed";
+        });
+        const auto second = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "Second";
+        });
+        check(typed != tables.end() && typed->columns().size() == 5,
+              "V2003 table creation did not preserve the typed schema");
+        check(typed->columns()[1].type == rea_jackcess::DataType::boolean &&
+                  typed->columns()[1].size == 1 && typed->columns()[1].fixed,
+              "V2003 BOOLEAN column did not keep the Jet4 bit layout");
+        check(second != tables.end() && second->columns().size() == 1,
+              "V2003 multi-table creation did not expose the second table");
+        check(!typed->rows().next() && !second->rows().next(),
+              "newly created V2003 tables unexpectedly contain rows");
+    }
+
+    {
+        auto writable = rea_jackcess::Database::open(path, rea_jackcess::DatabaseOpenMode::read_write);
+        auto tables = writable.tables();
+        const auto typed = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "Typed";
+        });
+        check(typed != tables.end(), "read-write V2003 database did not expose table Typed");
+        const auto row_ids = typed->add_rows({
+            {std::int32_t{1}, true, std::string("first"),
+             rea_jackcess::MemoValue{std::string(12000, 'M'), {}}, rea_jackcess::DecimalValue{"12.50"}},
+            {std::int32_t{2}, false, std::string(""),
+             rea_jackcess::MemoValue{"", {}}, rea_jackcess::DecimalValue{"-0.0001"}},
+        });
+        check(row_ids.size() == 2 && typed->row_count_header() == 2,
+              "V2003 row insertion returned the wrong row count");
+        typed->update_row(row_ids.front(),
+                          {std::int32_t{1}, false, std::string(200, 'u'),
+                           rea_jackcess::MemoValue{std::string(9000, 'U'), {}},
+                           rea_jackcess::DecimalValue{"922337203685477.5807"}});
+        check(typed->row_count_header() == 2, "V2003 update changed the table row count");
+
+        const auto second = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "Second";
+        });
+        check(second != tables.end(), "read-write V2003 database did not expose table Second");
+        const auto second_ids = second->add_rows({
+            {std::int32_t{1}},
+            {std::int32_t{2}},
+            {std::int32_t{3}},
+        });
+        check(second_ids.size() == 3 && second->row_count_header() == 3,
+              "V2003 second-table insertion returned the wrong row count");
+        second->delete_row(second_ids[1]);
+        check(second->row_count_header() == 2, "V2003 row deletion did not update the row count");
+    }
+
+    auto reopened = rea_jackcess::Database::open(path);
+    const auto tables = reopened.tables();
+    const auto typed = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+        return candidate.name() == "Typed";
+    });
+    check(typed != tables.end() && typed->row_count_header() == 2,
+          "reopened V2003 database lost table Typed");
+    {
+        auto rows = typed->rows();
+        const auto first = rows.next();
+        check(first && !std::get<bool>(first->at(1)) &&
+                  std::get<std::string>(first->at(2)) == std::string(200, 'u') &&
+                  std::get<rea_jackcess::MemoValue>(first->at(3)).text == std::string(9000, 'U') &&
+                  std::get<rea_jackcess::DecimalValue>(first->at(4)).text == "922337203685477.5807",
+              "reopened V2003 row did not preserve the updated values");
+        const auto second = rows.next();
+        check(second && std::get<std::int32_t>(second->at(0)) == 2 &&
+                  !std::get<bool>(second->at(1)) && std::get<std::string>(second->at(2)).empty() &&
+                  std::get<rea_jackcess::MemoValue>(second->at(3)).text.empty() &&
+                  std::get<rea_jackcess::DecimalValue>(second->at(4)).text == "-0.0001",
+              "reopened V2003 row did not preserve the initial values");
+        check(!rows.next(), "reopened V2003 table returned an unexpected extra row");
+    }
+    {
+        const auto second = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "Second";
+        });
+        check(second != tables.end() && second->row_count_header() == 2,
+              "reopened V2003 database lost the second table row count");
+        auto rows = second->rows();
+        const auto first = rows.next();
+        const auto last = rows.next();
+        check(first && std::get<std::int32_t>(first->at(0)) == 1 && last &&
+                  std::get<std::int32_t>(last->at(0)) == 3,
+              "reopened V2003 second table did not keep the surviving rows");
+        check(!rows.next(), "reopened V2003 second table returned an unexpected extra row");
+    }
+}
+
+void test_unknown_access_version_row_writes_are_rejected(const TemporaryDirectory& directory) {
     const std::vector<std::pair<std::string, std::string>> access_versions{
-        {"v2003-row-write.mdb", "09.50"},
         {"unknown-access-version-row-write.mdb", "99.99"},
         {"missing-access-version-row-write.mdb", ""},
     };
@@ -1068,7 +1419,7 @@ void test_v2003_row_writes_are_rejected(const TemporaryDirectory& directory) {
             table->delete_row({26, 0});
         });
         check(read_bytes(path) == before_write,
-              "non-V2000 Jet4 row operations modified the database before rejection");
+              "an unknown Jet4 AccessVersion version modified the database before rejection");
     }
 }
 
@@ -1239,17 +1590,17 @@ void test_unsupported_table_schema_preserves_destination(const TemporaryDirector
     check(read_bytes(path) == original_bytes,
           "unsupported table schema modified the existing destination");
 
-    rea_jackcess::TableBuilder supported_table("T");
-    supported_table.add_column("Id", rea_jackcess::DataType::int32);
+    rea_jackcess::TableBuilder v2003_unsupported_table("Unsupported");
+    v2003_unsupported_table.add_column("Amount", rea_jackcess::DataType::numeric);
     expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
         auto database = rea_jackcess::Database::create(
             path,
             rea_jackcess::DatabaseFormat::v2003,
-            std::vector<rea_jackcess::TableBuilder>{supported_table});
+            std::vector<rea_jackcess::TableBuilder>{v2003_unsupported_table});
         (void)database;
     });
     check(read_bytes(path) == original_bytes,
-          "unsupported V2003 table creation modified the existing destination");
+          "unsupported V2003 table schema modified the existing destination");
 }
 
 rea_jackcess::TableBuilder table_with_long_column_names(std::size_t column_count) {
@@ -1307,10 +1658,15 @@ int main() {
         test_add_rows_with_fixed_numeric_types(directory);
         test_create_and_write_money_columns(directory);
         test_create_and_write_guid_columns(directory);
+        test_create_and_write_boolean_columns(directory);
+        test_boolean_columns_across_null_mask_bytes(directory);
+        test_boolean_only_table(directory);
+        test_boolean_with_long_value_columns(directory);
         test_add_rows_with_text_and_binary_columns(directory);
         test_memo_and_ole_long_value_writes(directory);
         test_later_oversized_batch_row_is_rejected(directory);
-        test_v2003_row_writes_are_rejected(directory);
+        test_v2003_table_and_row_writes(directory);
+        test_unknown_access_version_row_writes_are_rejected(directory);
         test_row_writer_rejects_unsupported_column_layouts(directory);
         test_delete_rows_from_unindexed_table(directory);
         test_unsupported_table_schema_preserves_destination(directory);
