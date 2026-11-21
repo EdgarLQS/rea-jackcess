@@ -1,5 +1,5 @@
 #include "jet4_table_creator.hpp"
-#include "jet4_fixed_numeric.hpp"
+#include "jet4_fixed_type.hpp"
 #include "jet4_global_usage_map.hpp"
 #include "jet4_variable_type.hpp"
 
@@ -135,9 +135,9 @@ void validate_table_builder(const std::filesystem::path& path, const TableBuilde
         validate_name(path,
                       column.name(),
                       "Column names currently support 1-64 ASCII letters, digits, spaces, and underscores");
-        if (jet4_fixed_numeric_type(column.type()) == nullptr && jet4_variable_type(column.type()) == nullptr) {
+        if (jet4_fixed_type(column.type()) == nullptr && jet4_variable_type(column.type()) == nullptr) {
             unsupported_operation(path,
-                                 "Initial Jet4 table creation currently supports BYTE, SHORT, LONG, SINGLE, DOUBLE, TEXT, and BINARY columns only");
+                                 "Initial Jet4 table creation currently supports BYTE, SHORT, LONG, MONEY, SINGLE, DOUBLE, GUID, TEXT, BINARY, MEMO, and OLE columns only");
         }
         if (std::any_of(names.begin(), names.end(), [&](std::string_view previous) {
                 return equals_ascii_case_insensitive(previous, column.name());
@@ -522,6 +522,11 @@ std::vector<std::uint8_t> build_table_definition_page(const std::filesystem::pat
     for (const auto& column : table.columns()) {
         definition_size += 2 + column.name().size() * 2;
     }
+    const auto long_value_column_count = static_cast<std::uint64_t>(std::count_if(
+        table.columns().begin(), table.columns().end(), [](const ColumnBuilder& column) {
+            return jet4_is_long_value_type(column.type());
+        }));
+    definition_size += long_value_column_count * 10;
     if (definition_size > page_size || definition_size > std::numeric_limits<std::uint32_t>::max()) {
         unsupported_operation(path, "Table definitions larger than one Jet4 page are not yet supported");
     }
@@ -556,9 +561,13 @@ std::vector<std::uint8_t> build_table_definition_page(const std::filesystem::pat
     std::uint64_t column_offset = table_definition_header_size;
     std::uint64_t fixed_data_offset = 0;
     std::uint16_t variable_table_index = 0;
+    std::uint16_t long_value_table_index = static_cast<std::uint16_t>(std::count_if(
+        table.columns().begin(), table.columns().end(), [](const ColumnBuilder& column) {
+            return jet4_variable_type(column.type()) != nullptr && !jet4_is_long_value_type(column.type());
+        }));
     for (std::size_t index = 0; index < table.columns().size(); ++index) {
         const auto& column = table.columns()[index];
-        const auto* storage = jet4_fixed_numeric_type(column.type());
+        const auto* storage = jet4_fixed_type(column.type());
         const auto* variable_storage = jet4_variable_type(column.type());
         if ((storage == nullptr) == (variable_storage == nullptr)) {
             unsupported_operation(path, "Jet4 table has an unsupported column storage layout");
@@ -566,12 +575,15 @@ std::vector<std::uint8_t> build_table_definition_page(const std::filesystem::pat
         if (fixed_data_offset > std::numeric_limits<std::uint16_t>::max()) {
             unsupported_operation(path, "Jet4 table fixed data layout exceeds the format limit");
         }
+        const std::uint16_t variable_index = storage != nullptr
+                                                 ? 0
+                                                 : (jet4_is_long_value_type(column.type())
+                                                        ? long_value_table_index++
+                                                        : variable_table_index++);
         page[column_offset] = storage != nullptr ? storage->jet_type_code : variable_storage->jet_type_code;
         write_u32(page, column_offset + 1, table_definition_magic);
         write_u16(page, column_offset + 5, static_cast<std::uint16_t>(index));
-        write_u16(page,
-                  column_offset + 7,
-                  storage != nullptr ? 0 : variable_table_index++);
+        write_u16(page, column_offset + 7, variable_index);
         write_u16(page, column_offset + 9, static_cast<std::uint16_t>(index));
         page[column_offset + 11] = 0;
         page[column_offset + 12] = 0;
@@ -599,15 +611,38 @@ std::vector<std::uint8_t> build_table_definition_page(const std::filesystem::pat
             page[column_offset++] = 0;
         }
     }
+
+    std::uint8_t long_value_map_row = 2;
+    for (std::size_t index = 0; index < table.columns().size(); ++index) {
+        const auto& column = table.columns()[index];
+        if (!jet4_is_long_value_type(column.type())) {
+            continue;
+        }
+        write_u16(page, column_offset, static_cast<std::uint16_t>(index));
+        page[column_offset + 2] = long_value_map_row;
+        write_u24_le(page, column_offset + 3, usage_map_page_number);
+        page[column_offset + 6] = static_cast<std::uint8_t>(long_value_map_row + 1);
+        write_u24_le(page, column_offset + 7, usage_map_page_number);
+        long_value_map_row = static_cast<std::uint8_t>(long_value_map_row + 2);
+        column_offset += 10;
+    }
     page[column_offset++] = 0xff;
     page[column_offset] = 0xff;
     return page;
 }
 
 std::vector<std::uint8_t> build_usage_map_page(const std::filesystem::path& path,
-                                              std::uint32_t page_size) {
+                                              std::uint32_t page_size,
+                                              const TableBuilder& table) {
     constexpr std::uint64_t usage_map_row_size = 69;
-    constexpr std::uint16_t usage_map_count = 2;
+    const auto long_value_columns = static_cast<std::uint64_t>(std::count_if(
+        table.columns().begin(), table.columns().end(), [](const ColumnBuilder& column) {
+            return jet4_is_long_value_type(column.type());
+        }));
+    const std::uint64_t usage_map_count = 2 + long_value_columns * 2;
+    if (usage_map_count > 255) {
+        unsupported_operation(path, "Too many Memo/OLE columns for one Jet4 usage-map page");
+    }
     const std::uint64_t directory_size = usage_map_count * 2;
     const std::uint64_t header_size = data_page_row_directory_offset;
     const std::uint64_t total_row_size = usage_map_count * usage_map_row_size;
@@ -622,12 +657,11 @@ std::vector<std::uint8_t> build_usage_map_page(const std::filesystem::path& path
     write_u16(page, 2, free_space);
     write_u16(page, data_page_row_count_offset, usage_map_count);
 
-    const std::uint16_t first_row_start = static_cast<std::uint16_t>(page_size - usage_map_row_size);
-    const std::uint16_t second_row_start = static_cast<std::uint16_t>(page_size - 2 * usage_map_row_size);
-    write_u16(page, data_page_row_directory_offset, first_row_start);
-    write_u16(page, data_page_row_directory_offset + 2, second_row_start);
-    page[first_row_start] = 0x01;
-    page[second_row_start] = 0x00;
+    for (std::uint64_t row_number = 0; row_number < usage_map_count; ++row_number) {
+        const std::uint16_t row_start = static_cast<std::uint16_t>(page_size - (row_number + 1) * usage_map_row_size);
+        write_u16(page, data_page_row_directory_offset + row_number * 2, row_start);
+        page[row_start] = row_number == 0 ? 0x01 : 0x00;
+    }
     return page;
 }
 
@@ -811,7 +845,7 @@ void create_jet4_table(const std::filesystem::path& path,
                                                             file.format().page_size,
                                                             static_cast<std::uint32_t>(usage_map_page_number),
                                                             table);
-        usage_map_page = build_usage_map_page(path, file.format().page_size);
+        usage_map_page = build_usage_map_page(path, file.format().page_size, table);
         page_updates.emplace_back(1,
                                   mark_global_pages_allocated(file,
                                                               {table_definition_page_number,

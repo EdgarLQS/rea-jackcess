@@ -15,9 +15,13 @@ public final class JackcessVariableRowWriteCheck {
     private JackcessVariableRowWriteCheck() {}
 
     public static void main(String[] args) throws Exception {
-        if (args.length != 1) {
-            throw new IllegalArgumentException("Usage: JackcessVariableRowWriteCheck <database.mdb>");
+        if (args.length < 1 || args.length > 2) {
+            throw new IllegalArgumentException("Usage: JackcessVariableRowWriteCheck <database.mdb> [growth]");
         }
+        if (args.length == 2 && !"growth".equals(args[1])) {
+            throw new IllegalArgumentException("Expected optional mode 'growth'");
+        }
+        String expectedName = args.length == 2 ? "r".repeat(255) : "B";
 
         try (Database database = new DatabaseBuilder().withPath(Paths.get(args[0])).withReadOnly(true).open()) {
             Table table = database.getTable("Variable");
@@ -37,10 +41,10 @@ public final class JackcessVariableRowWriteCheck {
             Iterator<Row> rows = table.iterator();
             Row updated = rows.next();
             if (!Integer.valueOf(10).equals(updated.get("Id")) ||
-                !"B".equals(updated.get("Name")) ||
+                !expectedName.equals(updated.get("Name")) ||
                 !Arrays.equals(new byte[] {1, 2, 3}, (byte[]) updated.get("Payload")) ||
                 !"🚀".equals(updated.get("Note"))) {
-                throw new AssertionError("Jackcess did not observe the same-size TEXT/BINARY row update");
+                throw new AssertionError("Jackcess did not observe the expected TEXT/BINARY row update");
             }
 
             Row empty = rows.next();
@@ -70,6 +74,8 @@ public final class JackcessVariableRowWriteCheck {
             }
         }
 
-        System.out.println("Jackcess 5.2.0 verified TEXT/BINARY types, Unicode, empty values, NULL, and update");
+        System.out.println("Jackcess 5.2.0 verified TEXT/BINARY values after " +
+                           (args.length == 2 ? "row growth" : "row shrink") +
+                           ", Unicode, empty values, and NULL");
     }
 }

@@ -11,6 +11,7 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -145,7 +146,9 @@ void expect_error(rea_jackcess::DatabaseErrorCode code, Operation operation) {
     try {
         operation();
     } catch (const rea_jackcess::DatabaseError& error) {
-        check(error.code() == code, "database creation returned the wrong error code");
+        check(error.code() == code,
+              "database creation returned error code " + std::to_string(static_cast<int>(error.code())) +
+                  " instead of " + std::to_string(static_cast<int>(code)) + ": " + error.what());
         return;
     }
     throw std::runtime_error("expected database creation to fail");
@@ -517,6 +520,106 @@ void test_add_rows_with_fixed_numeric_types(const TemporaryDirectory& directory)
           "numeric table reopen did not preserve boundary and updated rows");
 }
 
+void test_create_and_write_money_columns(const TemporaryDirectory& directory) {
+    const auto path = directory.file("money-rows.mdb");
+    rea_jackcess::TableBuilder table_builder("MoneyValues");
+    table_builder.add_column("Amount", rea_jackcess::DataType::money);
+    {
+        const auto created = rea_jackcess::Database::create(
+            path,
+            rea_jackcess::DatabaseFormat::v2000,
+            std::vector<rea_jackcess::TableBuilder>{table_builder});
+        const auto tables = created.tables();
+        const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "MoneyValues";
+        });
+        check(table != tables.end() && table->columns().size() == 1 &&
+                  table->columns()[0].type == rea_jackcess::DataType::money &&
+                  table->columns()[0].fixed && table->columns()[0].size == 8,
+              "new MONEY table did not preserve the fixed-width currency schema");
+        check(!table->rows().next(), "new MONEY table unexpectedly contains rows");
+    }
+
+    rea_jackcess::RowId updated_row_id{};
+    {
+        auto writable = rea_jackcess::Database::open(path, rea_jackcess::DatabaseOpenMode::read_write);
+        auto tables = writable.tables();
+        const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "MoneyValues";
+        });
+        check(table != tables.end(), "read-write database did not expose MONEY table MoneyValues");
+
+        const auto row_ids = table->add_rows({
+            {rea_jackcess::DecimalValue{"-2341234.03450"}},
+            {rea_jackcess::DecimalValue{"37"}},
+            {rea_jackcess::DecimalValue{"10000.45"}},
+            {rea_jackcess::DecimalValue{"1e2"}},
+            {rea_jackcess::DecimalValue{"0e1000001"}},
+            {rea_jackcess::DecimalValue{"+922337203685477.5807"}},
+            {rea_jackcess::DecimalValue{"-922337203685477.5808"}},
+        });
+        check(row_ids.size() == 7 && table->row_count_header() == 7,
+              "MONEY batch insertion returned the wrong row count");
+        updated_row_id = row_ids[2];
+
+        auto initial_rows = table->rows();
+        const std::vector<std::string> expected{
+            "-2341234.0345", "37.0000", "10000.4500", "100.0000", "0.0000", "922337203685477.5807",
+            "-922337203685477.5808"};
+        for (std::size_t index = 0; index < expected.size(); ++index) {
+            const auto row = initial_rows.next();
+            check(row && row->id() == row_ids[index] &&
+                      std::get<rea_jackcess::DecimalValue>(row->at(0)).text == expected[index],
+                  "MONEY encoding did not preserve exact decimal values and scale");
+        }
+        check(!initial_rows.next(), "MONEY batch insertion returned an unexpected extra row");
+
+        const auto before_invalid_write = read_bytes(path);
+        for (const std::string invalid : {"1.00001", "922337203685477.5808", "-922337203685477.5809", "1e",
+                                          "0e-2147483648"}) {
+            expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+                (void)table->add_row({rea_jackcess::DecimalValue{invalid}});
+            });
+            check(read_bytes(path) == before_invalid_write,
+                  "invalid MONEY input changed the database before validation failed");
+        }
+        expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+            (void)table->add_row({std::int64_t{42}});
+        });
+        check(read_bytes(path) == before_invalid_write,
+              "a mismatched MONEY value type changed the database before validation failed");
+
+        table->update_row(updated_row_id, {rea_jackcess::DecimalValue{"-0.0001"}});
+        check(table->row_count_header() == 7,
+              "MONEY update changed the table row count");
+        auto rows = table->rows();
+        for (std::size_t index = 0; index < expected.size(); ++index) {
+            const auto row = rows.next();
+            const std::string& expected_value = index == 2 ? "-0.0001" : expected[index];
+            check(row && row->id() == row_ids[index] &&
+                      std::get<rea_jackcess::DecimalValue>(row->at(0)).text == expected_value,
+                  "MONEY update changed an unexpected value or RowId");
+        }
+        check(!rows.next(), "MONEY update returned an unexpected extra row");
+    }
+
+    auto reopened = rea_jackcess::Database::open(path);
+    const auto tables = reopened.tables();
+    const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+        return candidate.name() == "MoneyValues";
+    });
+    check(table != tables.end() && table->row_count_header() == 7,
+          "reopened MONEY table has an incorrect row count");
+    auto rows = table->rows();
+    for (const std::string expected : {"-2341234.0345", "37.0000", "-0.0001", "100.0000", "0.0000",
+                                       "922337203685477.5807", "-922337203685477.5808"}) {
+        const auto row = rows.next();
+        check(row && std::get<rea_jackcess::DecimalValue>(row->at(0)).text == expected,
+              "reopened MONEY table did not preserve exact decimal values");
+    }
+    check(!rows.next(), "reopened MONEY table returned an unexpected extra row");
+}
+
 void test_add_rows_with_text_and_binary_columns(const TemporaryDirectory& directory) {
     const auto path = directory.file("variable-rows.mdb");
     rea_jackcess::TableBuilder table_builder("Variable");
@@ -620,19 +723,42 @@ void test_add_rows_with_text_and_binary_columns(const TemporaryDirectory& direct
         check(read_bytes(path) == before_invalid_write,
               "oversized BINARY modified the file before validation failed");
 
+        const auto before_inline_shrink = read_bytes(path);
+        table->update_row(row_ids[0],
+                          {std::int32_t{10}, std::string{},
+                           rea_jackcess::BlobValue{{1, 2, 3}}, std::string("🚀")});
+        check(table->row_count_header() == 4 && read_bytes(path) != before_inline_shrink,
+              "shrinking an inline row did not compact its data page");
+        check(table->rows().next()->id() == row_ids[0],
+              "shrinking an inline row changed the logical RowId");
+
+        const auto before_first_growth = read_bytes(path);
+        table->update_row(row_ids[0],
+                          {std::int32_t{10}, std::string(127, 'z'),
+                           rea_jackcess::BlobValue{{1, 2, 3}}, std::string("🚀")});
+        check(table->row_count_header() == 4 && read_bytes(path) != before_first_growth,
+              "growing TEXT update did not migrate the row without changing the row count");
+        check(table->rows().next()->id() == row_ids[0],
+              "growing TEXT update changed the logical RowId");
+
+        const auto before_second_growth = read_bytes(path);
+        table->update_row(row_ids[0],
+                          {std::int32_t{10}, std::string(255, 'q'),
+                           rea_jackcess::BlobValue{{1, 2, 3}}, std::string("🚀")});
+        check(table->row_count_header() == 4 && read_bytes(path) != before_second_growth,
+              "second growing TEXT update did not replace the overflow row");
+
+        table->update_row(row_ids[0],
+                          {std::int32_t{10}, std::string(255, 'r'),
+                           rea_jackcess::BlobValue{{1, 2, 3}}, std::string("🚀")});
+        check(table->row_count_header() == 4,
+              "same-size overflow-row update changed the row count");
+        const auto before_overflow_shrink = read_bytes(path);
         table->update_row(row_ids[0],
                           {std::int32_t{10}, std::string("B"),
                            rea_jackcess::BlobValue{{1, 2, 3}}, std::string("🚀")});
-        check(table->row_count_header() == 4,
-              "same-size variable row update changed the row count");
-        const auto before_size_change = read_bytes(path);
-        expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
-            table->update_row(row_ids[0],
-                              {std::int32_t{10}, std::string("longer"),
-                               rea_jackcess::BlobValue{{1, 2, 3}}, std::string("🚀")});
-        });
-        check(read_bytes(path) == before_size_change,
-              "different-size variable update modified the row before rejection");
+        check(table->row_count_header() == 4 && read_bytes(path) != before_overflow_shrink,
+              "shrinking an overflow row did not compact its data page");
 
         auto updated_rows = table->rows();
         const auto updated = updated_rows.next();
@@ -641,7 +767,7 @@ void test_add_rows_with_text_and_binary_columns(const TemporaryDirectory& direct
                   std::get<rea_jackcess::BlobValue>(updated->at(2)).bytes ==
                       std::vector<std::uint8_t>({1, 2, 3}) &&
                   std::get<std::string>(updated->at(3)) == "🚀",
-              "same-size variable row update changed the wrong values or RowId");
+              "shrinking an overflow row changed the wrong values or RowId");
     }
 
     const auto reopened = rea_jackcess::Database::open(path);
@@ -658,7 +784,7 @@ void test_add_rows_with_text_and_binary_columns(const TemporaryDirectory& direct
               std::get<rea_jackcess::BlobValue>(updated->at(2)).bytes ==
                   std::vector<std::uint8_t>({1, 2, 3}) &&
               std::get<std::string>(updated->at(3)) == "🚀",
-          "read-only reopen did not preserve updated variable values and RowId");
+          "read-only reopen did not preserve shrunk variable values and RowId");
     const auto empty_values = rows.next();
     const auto third = rows.next();
     check(empty_values && std::get<std::string>(empty_values->at(1)).empty() &&
@@ -674,6 +800,195 @@ void test_add_rows_with_text_and_binary_columns(const TemporaryDirectory& direct
                   std::vector<std::uint8_t>(255, 0xa5) &&
               std::get<std::string>(boundary->at(3)) == std::string(255, 'y') && !rows.next(),
           "read-only reopen changed maximum TEXT/BINARY values");
+}
+
+void test_memo_and_ole_long_value_writes(const TemporaryDirectory& directory) {
+    const auto path = directory.file("long-values.mdb");
+    rea_jackcess::TableBuilder table_builder("LongValues");
+    table_builder.add_column("Id", rea_jackcess::DataType::int32)
+        .add_column("Memo", rea_jackcess::DataType::memo)
+        .add_column("Note", rea_jackcess::DataType::text)
+        .add_column("Payload", rea_jackcess::DataType::ole);
+    {
+        const auto created = rea_jackcess::Database::create(
+            path,
+            rea_jackcess::DatabaseFormat::v2000,
+            std::vector<rea_jackcess::TableBuilder>{table_builder});
+        (void)created;
+    }
+
+    std::vector<std::uint8_t> initial_payload(5000, 0xa5);
+    std::vector<std::uint8_t> updated_payload(8192, 0x6c);
+    const std::string initial_memo(12000, 'M');
+    const std::string updated_memo(20000, 'U');
+    {
+        auto writable = rea_jackcess::Database::open(path, rea_jackcess::DatabaseOpenMode::read_write);
+        auto tables = writable.tables();
+        const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "LongValues";
+        });
+        check(table != tables.end(), "read-write database did not expose the Memo/OLE table");
+        check(table->columns().size() == 4 &&
+                  table->columns()[1].type == rea_jackcess::DataType::memo &&
+                  table->columns()[3].type == rea_jackcess::DataType::ole,
+              "created Memo/OLE columns did not preserve their Jet4 schema");
+
+        const auto row_ids = table->add_rows({
+            {rea_jackcess::Value{std::int32_t{1}},
+             rea_jackcess::Value{rea_jackcess::MemoValue{initial_memo, {}}},
+             rea_jackcess::Value{std::string("tail")},
+             rea_jackcess::Value{rea_jackcess::BlobValue{initial_payload}}},
+            {rea_jackcess::Value{std::int32_t{2}},
+             rea_jackcess::Value{rea_jackcess::MemoValue{"🔥雪", {}}},
+             rea_jackcess::Value{std::string("N")},
+             rea_jackcess::Value{rea_jackcess::BlobValue{{}}}},
+            {rea_jackcess::Value{std::int32_t{3}},
+             rea_jackcess::Value{rea_jackcess::MemoValue{"", {}}},
+             rea_jackcess::Value{std::string{}},
+             rea_jackcess::Value{rea_jackcess::BlobValue{{}}}},
+            {rea_jackcess::Value{std::int32_t{4}},
+             rea_jackcess::Value{std::monostate{}},
+             rea_jackcess::Value{std::monostate{}},
+             rea_jackcess::Value{std::monostate{}}},
+        });
+        check(row_ids.size() == 4 && table->row_count_header() == 4,
+              "Memo/OLE append did not preserve row ids and row count");
+
+        table->update_row(row_ids.front(),
+                          {rea_jackcess::Value{std::int32_t{1}},
+                           rea_jackcess::Value{rea_jackcess::MemoValue{updated_memo, {}}},
+                           rea_jackcess::Value{std::string("tail")},
+                           rea_jackcess::Value{rea_jackcess::BlobValue{updated_payload}}});
+
+        auto rows = table->rows();
+        const auto updated = rows.next();
+        check(updated && updated->id() == row_ids.front() &&
+                  std::get<rea_jackcess::MemoValue>(updated->at(1)).text == updated_memo &&
+                  std::get<rea_jackcess::MemoValue>(updated->at(1)).raw_bytes.size() == updated_memo.size() * 2 &&
+                  std::get<std::string>(updated->at(2)) == "tail" &&
+                  std::get<rea_jackcess::BlobValue>(updated->at(3)).bytes == updated_payload,
+              "C++ did not read updated multi-page MEMO/OLE data and subsequent variable columns");
+
+        const auto unicode = rows.next();
+        check(unicode && std::get<rea_jackcess::MemoValue>(unicode->at(1)).text == "🔥雪" &&
+                  std::get<std::string>(unicode->at(2)) == "N" &&
+                  std::get<rea_jackcess::BlobValue>(unicode->at(3)).bytes.empty(),
+              "C++ confused Unicode Memo, empty OLE, or a later variable-column offset");
+        const auto empty = rows.next();
+        check(empty && std::get<rea_jackcess::MemoValue>(empty->at(1)).text.empty() &&
+                  std::get<rea_jackcess::BlobValue>(empty->at(3)).bytes.empty(),
+              "C++ confused empty Memo/OLE values with NULL");
+        const auto nulls = rows.next();
+        check(nulls && std::holds_alternative<std::monostate>(nulls->at(1)) &&
+                  std::holds_alternative<std::monostate>(nulls->at(2)) &&
+                  std::holds_alternative<std::monostate>(nulls->at(3)) && !rows.next(),
+              "C++ did not preserve NULL Memo/OLE values");
+    }
+
+    auto reopened = rea_jackcess::Database::open(path);
+    const auto tables = reopened.tables();
+    const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+        return candidate.name() == "LongValues";
+    });
+    check(table != tables.end() && table->row_count_header() == 4,
+          "reopened Memo/OLE table has an incorrect row count");
+    auto rows = table->rows();
+    const auto first = rows.next();
+    check(first && std::get<rea_jackcess::MemoValue>(first->at(1)).text == updated_memo &&
+              std::get<rea_jackcess::BlobValue>(first->at(3)).bytes == updated_payload,
+          "reopened database did not preserve multi-page Memo/OLE updates");
+}
+
+void test_create_and_write_guid_columns(const TemporaryDirectory& directory) {
+    const auto path = directory.file("guid-rows.mdb");
+    rea_jackcess::TableBuilder table_builder("Guids");
+    table_builder.add_column("Id", rea_jackcess::DataType::int32)
+        .add_column("Uuid", rea_jackcess::DataType::guid);
+
+    {
+        const auto created = rea_jackcess::Database::create(
+            path,
+            rea_jackcess::DatabaseFormat::v2000,
+            std::vector<rea_jackcess::TableBuilder>{table_builder});
+        const auto tables = created.tables();
+        const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "Guids";
+        });
+        check(table != tables.end() && table->columns().size() == 2 &&
+                  table->columns()[1].type == rea_jackcess::DataType::guid &&
+                  table->columns()[1].fixed && table->columns()[1].size == 16,
+              "new GUID table did not preserve its fixed-width column definition");
+    }
+
+    rea_jackcess::RowId first_row_id{};
+    {
+        auto writable = rea_jackcess::Database::open(path, rea_jackcess::DatabaseOpenMode::read_write);
+        auto tables = writable.tables();
+        const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+            return candidate.name() == "Guids";
+        });
+        check(table != tables.end(), "read-write database did not expose GUID table Guids");
+
+        const auto row_ids = table->add_rows({
+            {std::int32_t{1}, rea_jackcess::GuidValue{"{00112233-4455-6677-8899-AABBCCDDEEFF}"}},
+            {std::int32_t{2}, rea_jackcess::GuidValue{"01234567-89ab-cdef-0123-456789abcdef"}},
+        });
+        check(row_ids.size() == 2 && table->row_count_header() == 2,
+              "GUID batch insertion returned an incorrect row count");
+        first_row_id = row_ids.front();
+
+        auto rows = table->rows();
+        const auto first = rows.next();
+        const auto second = rows.next();
+        check(first && first->id() == row_ids[0] &&
+                  std::get<rea_jackcess::GuidValue>(first->at(1)).text ==
+                      "{00112233-4455-6677-8899-aabbccddeeff}" &&
+                  second && second->id() == row_ids[1] &&
+                  std::get<rea_jackcess::GuidValue>(second->at(1)).text ==
+                      "{01234567-89ab-cdef-0123-456789abcdef}" && !rows.next(),
+              "GUID encoding did not preserve canonical values and byte ordering");
+
+        const auto before_invalid_guid = read_bytes(path);
+        expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+            (void)table->add_row({std::int32_t{3}, rea_jackcess::GuidValue{"not-a-guid"}});
+        });
+        check(read_bytes(path) == before_invalid_guid,
+              "malformed GUID changed the database before validation failed");
+        expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
+            (void)table->add_row({std::int32_t{3}, std::string("00112233-4455-6677-8899-aabbccddeeff")});
+        });
+        check(read_bytes(path) == before_invalid_guid,
+              "a mismatched GUID value type changed the database before validation failed");
+
+        table->update_row(row_ids[0],
+                          {std::int32_t{1}, rea_jackcess::GuidValue{"{fedcba98-7654-3210-fedc-ba9876543210}"}});
+        check(table->row_count_header() == 2,
+              "GUID update changed the table row count");
+        rows = table->rows();
+        const auto updated = rows.next();
+        check(updated && updated->id() == row_ids[0] &&
+                  std::get<rea_jackcess::GuidValue>(updated->at(1)).text ==
+                      "{fedcba98-7654-3210-fedc-ba9876543210}" &&
+                  rows.next() && !rows.next(),
+              "GUID update changed the wrong value or logical RowId");
+    }
+
+    const auto reopened = rea_jackcess::Database::open(path);
+    const auto tables = reopened.tables();
+    const auto table = std::find_if(tables.begin(), tables.end(), [](const auto& candidate) {
+        return candidate.name() == "Guids";
+    });
+    check(table != tables.end() && table->row_count_header() == 2,
+          "GUID table reopen did not preserve its row count");
+    auto rows = table->rows();
+    const auto updated = rows.next();
+    const auto second = rows.next();
+    check(updated && updated->id() == first_row_id &&
+              std::get<rea_jackcess::GuidValue>(updated->at(1)).text ==
+                  "{fedcba98-7654-3210-fedc-ba9876543210}" &&
+              second && std::get<rea_jackcess::GuidValue>(second->at(1)).text ==
+                            "{01234567-89ab-cdef-0123-456789abcdef}" && !rows.next(),
+          "GUID table reopen did not preserve updated and untouched rows");
 }
 
 void test_later_oversized_batch_row_is_rejected(const TemporaryDirectory& directory) {
@@ -913,7 +1228,7 @@ void test_unsupported_table_schema_preserves_destination(const TemporaryDirector
     const auto original_bytes = read_bytes(path);
 
     rea_jackcess::TableBuilder unsupported_table("Unsupported");
-    unsupported_table.add_column("Content", rea_jackcess::DataType::memo);
+    unsupported_table.add_column("Amount", rea_jackcess::DataType::numeric);
     expect_error(rea_jackcess::DatabaseErrorCode::unsupported_operation, [&] {
         auto database = rea_jackcess::Database::create(
             path,
@@ -990,7 +1305,10 @@ int main() {
         test_create_empty_tables(directory);
         test_add_rows_to_unindexed_long_table(directory);
         test_add_rows_with_fixed_numeric_types(directory);
+        test_create_and_write_money_columns(directory);
+        test_create_and_write_guid_columns(directory);
         test_add_rows_with_text_and_binary_columns(directory);
+        test_memo_and_ole_long_value_writes(directory);
         test_later_oversized_batch_row_is_rejected(directory);
         test_v2003_row_writes_are_rejected(directory);
         test_row_writer_rejects_unsupported_column_layouts(directory);

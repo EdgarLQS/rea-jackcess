@@ -15,11 +15,18 @@ int main(int argc, char** argv) {
     const bool update_row = argc == 3 && std::string(argv[2]) == "--update-row";
     const bool delete_row = argc == 3 && std::string(argv[2]) == "--delete-row";
     const bool fixed_numeric_rows = argc == 3 && std::string(argv[2]) == "--fixed-numeric-rows";
-    const bool variable_rows = argc == 3 && std::string(argv[2]) == "--variable-rows";
-    const bool writes_rows = batch_rows || update_row || delete_row || fixed_numeric_rows || variable_rows;
-    if (argc != 2 && !single_table && !maximum_definition && !writes_rows) {
+    const bool money_rows = argc == 3 && std::string(argv[2]) == "--money-rows";
+    const bool money_empty = argc == 3 && std::string(argv[2]) == "--money-empty";
+    const bool guid_rows = argc == 3 && std::string(argv[2]) == "--guid-rows";
+    const bool variable_row_growth = argc == 3 && std::string(argv[2]) == "--variable-rows-growth";
+    const bool variable_row_shrink = argc == 3 && std::string(argv[2]) == "--variable-rows";
+    const bool variable_rows = variable_row_growth || variable_row_shrink;
+    const bool long_value_rows = argc == 3 && std::string(argv[2]) == "--long-value-rows";
+    const bool writes_rows = batch_rows || update_row || delete_row || fixed_numeric_rows ||
+                             money_rows || guid_rows || variable_rows || long_value_rows;
+    if (argc != 2 && !single_table && !maximum_definition && !writes_rows && !money_empty) {
         std::cerr << "Usage: create_tables_for_jackcess_check <database.mdb> "
-                     "[--single|--maximum-definition|--batch-rows|--update-row|--delete-row|--fixed-numeric-rows|--variable-rows]\n";
+                     "[--single|--maximum-definition|--batch-rows|--update-row|--delete-row|--fixed-numeric-rows|--money-rows|--money-empty|--guid-rows|--variable-rows-growth|--variable-rows|--long-value-rows]\n";
         return 2;
     }
 
@@ -42,15 +49,34 @@ int main(int argc, char** argv) {
             .add_column("SingleValue", rea_jackcess::DataType::float32)
             .add_column("DoubleValue", rea_jackcess::DataType::float64);
 
+        rea_jackcess::TableBuilder money_table("MoneyValues");
+        money_table.add_column("Amount", rea_jackcess::DataType::money);
+
+        rea_jackcess::TableBuilder guid_table("Guids");
+        guid_table.add_column("Id", rea_jackcess::DataType::int32)
+            .add_column("Uuid", rea_jackcess::DataType::guid);
+
         rea_jackcess::TableBuilder variable_table("Variable");
         variable_table.add_column("Id", rea_jackcess::DataType::int32)
             .add_column("Name", rea_jackcess::DataType::text)
             .add_column("Payload", rea_jackcess::DataType::binary)
             .add_column("Note", rea_jackcess::DataType::text);
 
+        rea_jackcess::TableBuilder long_value_table("LongValues");
+        long_value_table.add_column("Id", rea_jackcess::DataType::int32)
+            .add_column("Memo", rea_jackcess::DataType::memo)
+            .add_column("Note", rea_jackcess::DataType::text)
+            .add_column("Payload", rea_jackcess::DataType::ole);
+
         std::vector<rea_jackcess::TableBuilder> tables{
-            variable_rows ? variable_table
-                          : (fixed_numeric_rows ? fixed_numeric_table : (writes_rows ? batch_table : first_table))};
+            long_value_rows ? long_value_table
+                            : (variable_rows ? variable_table
+                                             : (fixed_numeric_rows ? fixed_numeric_table
+                                                                   : ((money_rows || money_empty)
+                                                                          ? money_table
+                                                                          : (guid_rows ? guid_table
+                                                                                       : (writes_rows ? batch_table
+                                                                                                      : first_table))))};
         if (!single_table) {
             if (maximum_definition) {
                 rea_jackcess::TableBuilder large_table("Large");
@@ -59,7 +85,7 @@ int main(int argc, char** argv) {
                                            rea_jackcess::DataType::int32);
                 }
                 tables = {large_table};
-            } else if (!writes_rows) {
+            } else if (!writes_rows && !money_empty) {
                 tables.push_back(second_table);
             }
         }
@@ -78,15 +104,59 @@ int main(int argc, char** argv) {
             auto database = rea_jackcess::Database::open(
                 argv[1], rea_jackcess::DatabaseOpenMode::read_write);
             auto tables_after_open = database.tables();
+            const std::string expected_table_name = long_value_rows
+                                                        ? "LongValues"
+                                                        : (variable_rows ? "Variable"
+                                                                         : (money_rows ? "MoneyValues"
+                                                                                       : (guid_rows ? "Guids" : "T")));
             const auto table = std::find_if(tables_after_open.begin(), tables_after_open.end(),
                                             [&](const auto& candidate) {
-                                                return candidate.name() == (variable_rows ? "Variable" : "T");
+                                                return candidate.name() == expected_table_name;
                                             });
             if (table == tables_after_open.end()) {
                 throw std::runtime_error("Read-write reopen did not discover the expected table");
             }
 
-            if (variable_rows) {
+            if (long_value_rows) {
+                std::vector<std::uint8_t> initial_payload(5000, 0xa5);
+                std::vector<std::uint8_t> updated_payload(8192, 0x6c);
+                const std::string initial_memo(12000, 'M');
+                const std::string updated_memo(20000, 'U');
+                const auto row_ids = table->add_rows({
+                    {std::int32_t{1}, rea_jackcess::MemoValue{initial_memo, {}}, std::string("tail"),
+                     rea_jackcess::BlobValue{initial_payload}},
+                    {std::int32_t{2}, rea_jackcess::MemoValue{"🔥雪", {}}, std::string("N"),
+                     rea_jackcess::BlobValue{{}}},
+                    {std::int32_t{3}, rea_jackcess::MemoValue{"", {}}, std::string{},
+                     rea_jackcess::BlobValue{{}}},
+                    {std::int32_t{4}, std::monostate{}, std::monostate{}, std::monostate{}},
+                });
+                table->update_row(row_ids.front(),
+                                  {std::int32_t{1}, rea_jackcess::MemoValue{updated_memo, {}}, std::string("tail"),
+                                   rea_jackcess::BlobValue{updated_payload}});
+                std::cout << "Wrote and updated multi-page MEMO/OLE values, including Unicode, empty, and NULL rows\n";
+            } else if (money_rows) {
+                const auto row_ids = table->add_rows({
+                    {rea_jackcess::DecimalValue{"-2341234.03450"}},
+                    {rea_jackcess::DecimalValue{"37"}},
+                    {rea_jackcess::DecimalValue{"10000.45"}},
+                    {rea_jackcess::DecimalValue{"1e2"}},
+                    {rea_jackcess::DecimalValue{"0e1000001"}},
+                    {rea_jackcess::DecimalValue{"+922337203685477.5807"}},
+                    {rea_jackcess::DecimalValue{"-922337203685477.5808"}},
+                });
+                table->update_row(row_ids[2], {rea_jackcess::DecimalValue{"-0.0001"}});
+                std::cout << "Wrote and updated exact Jet4 MONEY values at both signed boundaries\n";
+            } else if (guid_rows) {
+                const auto row_ids = table->add_rows({
+                    {std::int32_t{1}, rea_jackcess::GuidValue{"{00112233-4455-6677-8899-AABBCCDDEEFF}"}},
+                    {std::int32_t{2}, rea_jackcess::GuidValue{"01234567-89ab-cdef-0123-456789abcdef"}},
+                });
+                table->update_row(row_ids.front(),
+                                  {std::int32_t{1},
+                                   rea_jackcess::GuidValue{"{fedcba98-7654-3210-fedc-ba9876543210}"}});
+                std::cout << "Wrote and updated fixed-width GUID values\n";
+            } else if (variable_rows) {
                 const auto row_ids = table->add_rows({
                     {std::int32_t{1}, std::string("A"), rea_jackcess::BlobValue{{0, 0x7f, 0xff}}, std::string("🔥")},
                     {std::int32_t{2}, std::string{}, rea_jackcess::BlobValue{}, std::monostate{}},
@@ -94,10 +164,27 @@ int main(int argc, char** argv) {
                     {std::int32_t{4}, std::string(255, 'x'),
                      rea_jackcess::BlobValue{std::vector<std::uint8_t>(255, 0xa5)}, std::string(255, 'y')},
                 });
+                if (variable_row_shrink) {
+                    table->update_row(row_ids.front(),
+                                      {std::int32_t{10}, std::string{},
+                                       rea_jackcess::BlobValue{{1, 2, 3}}, std::string("🚀")});
+                }
                 table->update_row(row_ids.front(),
-                                  {std::int32_t{10}, std::string("B"),
+                                  {std::int32_t{10}, std::string(127, 'z'),
                                    rea_jackcess::BlobValue{{1, 2, 3}}, std::string("🚀")});
-                std::cout << "Wrote UTF-8 TEXT and BINARY rows, including empty and NULL values\n";
+                table->update_row(row_ids.front(),
+                                  {std::int32_t{10}, std::string(255, 'q'),
+                                   rea_jackcess::BlobValue{{1, 2, 3}}, std::string("🚀")});
+                table->update_row(row_ids.front(),
+                                  {std::int32_t{10}, std::string(255, 'r'),
+                                   rea_jackcess::BlobValue{{1, 2, 3}}, std::string("🚀")});
+                if (variable_row_shrink) {
+                    table->update_row(row_ids.front(),
+                                      {std::int32_t{10}, std::string("B"),
+                                       rea_jackcess::BlobValue{{1, 2, 3}}, std::string("🚀")});
+                }
+                std::cout << "Wrote UTF-8 TEXT and BINARY rows, including overflow-row growth"
+                          << (variable_row_shrink ? " and shrink" : "") << ", empty, and NULL values\n";
             } else if (fixed_numeric_rows) {
                 const auto row_ids = table->add_rows({
                     {std::int8_t{-128}, std::int16_t{-32768}, std::int32_t{-2147483647 - 1}, -1.25F, 1.0 / 3.0},

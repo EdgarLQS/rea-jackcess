@@ -10,25 +10,29 @@ namespace rea_jackcess::detail {
 inline constexpr std::uint8_t jet4_byte_type_code = 0x02;
 inline constexpr std::uint8_t jet4_short_type_code = 0x03;
 inline constexpr std::uint8_t jet4_long_type_code = 0x04;
+inline constexpr std::uint8_t jet4_money_type_code = 0x05;
 inline constexpr std::uint8_t jet4_float_type_code = 0x06;
 inline constexpr std::uint8_t jet4_double_type_code = 0x07;
+inline constexpr std::uint8_t jet4_guid_type_code = 0x0f;
 
-struct Jet4FixedNumericType {
+struct Jet4FixedType {
     DataType public_type;
     std::uint8_t jet_type_code;
     std::uint16_t byte_size;
 };
 
-inline constexpr std::array<Jet4FixedNumericType, 5> jet4_fixed_numeric_types{{
+inline constexpr std::array<Jet4FixedType, 7> jet4_fixed_types{{
     {DataType::byte, jet4_byte_type_code, 1},
     {DataType::int16, jet4_short_type_code, 2},
     {DataType::int32, jet4_long_type_code, 4},
+    {DataType::money, jet4_money_type_code, 8},
     {DataType::float32, jet4_float_type_code, 4},
     {DataType::float64, jet4_double_type_code, 8},
+    {DataType::guid, jet4_guid_type_code, 16},
 }};
 
-inline const Jet4FixedNumericType* jet4_fixed_numeric_type(DataType type) noexcept {
-    for (const auto& candidate : jet4_fixed_numeric_types) {
+inline const Jet4FixedType* jet4_fixed_type(DataType type) noexcept {
+    for (const auto& candidate : jet4_fixed_types) {
         if (candidate.public_type == type) {
             return &candidate;
         }
@@ -36,8 +40,8 @@ inline const Jet4FixedNumericType* jet4_fixed_numeric_type(DataType type) noexce
     return nullptr;
 }
 
-inline const Jet4FixedNumericType* jet4_fixed_numeric_type(std::uint8_t type_code) noexcept {
-    for (const auto& candidate : jet4_fixed_numeric_types) {
+inline const Jet4FixedType* jet4_fixed_type(std::uint8_t type_code) noexcept {
+    for (const auto& candidate : jet4_fixed_types) {
         if (candidate.jet_type_code == type_code) {
             return &candidate;
         }

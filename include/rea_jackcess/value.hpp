@@ -8,6 +8,7 @@
 namespace rea_jackcess {
 
 struct DecimalValue {
+    // Decimal text for MONEY writes; conversion to four fractional digits is exact and does not round.
     std::string text;
 };
 
@@ -20,10 +21,13 @@ struct DateOutOfRangeValue {
 };
 
 struct GuidValue {
+    // Canonical 8-4-4-4-12 hexadecimal text; Jet4 writes also accept surrounding braces.
     std::string text;
 };
 
 struct MemoValue {
+    // Writes use non-empty raw_bytes verbatim; otherwise text is encoded as Jet4 UTF-16LE.
+    // An empty MemoValue is distinct from NULL (std::monostate).
     std::string text;
     std::vector<std::uint8_t> raw_bytes;
 };

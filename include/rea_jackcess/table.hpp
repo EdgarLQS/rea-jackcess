@@ -117,11 +117,12 @@ public:
     // Scans rows in the order of the named index. The index name must match exactly.
     RowCursor rows_by_index(const std::string& index_name) const;
     // Adds one row to an explicitly read-write database; returns its physical location.
-    // Current Jet4 support covers fixed BYTE/SHORT/LONG/SINGLE/DOUBLE and variable TEXT/BINARY columns.
+    // Current Jet4 support covers fixed BYTE/SHORT/LONG/MONEY/SINGLE/DOUBLE/GUID and variable TEXT/BINARY/MEMO/OLE columns.
     RowId add_row(const std::vector<Value>& values);
     // Adds a batch of rows and returns their physical locations in input order.
     std::vector<RowId> add_rows(const std::vector<std::vector<Value>>& rows);
-    // Updates local, unindexed Jet4 V2000 supported rows in place when the encoded row size is unchanged.
+    // Updates local, unindexed Jet4 V2000 rows in place, compacts them on shrink, or grows them through overflow.
+    // RowId remains stable across these size changes.
     void update_row(RowId row_id, const std::vector<Value>& values);
     // Marks a live local, unindexed Jet4 V2000 row as deleted.
     void delete_row(RowId row_id);

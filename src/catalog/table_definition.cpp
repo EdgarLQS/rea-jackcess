@@ -38,6 +38,8 @@ constexpr std::uint16_t maximum_index_name_bytes = 128;
 constexpr std::uint16_t maximum_index_columns = 10;
 constexpr std::uint16_t unused_index_column = 0xffff;
 constexpr std::uint8_t ascending_column_flag = 0x01;
+constexpr std::uint8_t ole_type = 0x0b;
+constexpr std::uint8_t memo_type = 0x0c;
 
 [[noreturn]] void corrupted_page(const PageFile& file,
                                  std::uint64_t page_number,
@@ -387,6 +389,49 @@ TableDefinition read_table_definition(const PageFile& file, std::uint64_t page_n
                                           maximum_index_name_bytes);
     for (std::size_t index = 0; index < indexes.size(); ++index) {
         indexes[index].name = named_indexes.names[index];
+    }
+
+    const auto long_value_column_count = static_cast<std::uint64_t>(std::count_if(
+        columns.begin(), columns.end(), [](const auto& column) {
+            return column.type == ole_type || column.type == memo_type;
+        }));
+    std::uint64_t column_usage_map_offset = named_indexes.end_offset;
+    bool column_usage_maps_valid = true;
+    std::vector<std::pair<ColumnDefinition*, std::pair<UsageMapReference, UsageMapReference>>> parsed_column_maps;
+    parsed_column_maps.reserve(static_cast<std::size_t>(long_value_column_count));
+    for (std::uint64_t index = 0; index < long_value_column_count; ++index) {
+        if (column_usage_map_offset > definition_size || 10 > definition_size - column_usage_map_offset) {
+            column_usage_maps_valid = false;
+            break;
+        }
+        const auto encoded = read_definition_span(file,
+                                                  page_number,
+                                                  continuation_pages,
+                                                  column_usage_map_offset,
+                                                  10);
+        const std::uint16_t column_number = read_u16(file, page_number, encoded, 0);
+        const auto column = std::find_if(columns.begin(), columns.end(), [&](const auto& candidate) {
+            return candidate.column_number == column_number &&
+                   (candidate.type == ole_type || candidate.type == memo_type);
+        });
+        if (column == columns.end() ||
+            std::any_of(parsed_column_maps.begin(), parsed_column_maps.end(), [&](const auto& entry) {
+                return entry.first == &*column;
+            })) {
+            column_usage_maps_valid = false;
+            break;
+        }
+        parsed_column_maps.push_back({
+            &*column,
+            {UsageMapReference{encoded[2], read_u24(file, page_number, encoded, 3)},
+             UsageMapReference{encoded[6], read_u24(file, page_number, encoded, 7)}}});
+        column_usage_map_offset += 10;
+    }
+    if (column_usage_maps_valid && parsed_column_maps.size() == long_value_column_count) {
+        for (const auto& entry : parsed_column_maps) {
+            entry.first->long_value_owned_pages = entry.second.first;
+            entry.first->long_value_free_space_pages = entry.second.second;
+        }
     }
 
     return {

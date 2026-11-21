@@ -23,6 +23,8 @@ struct ColumnDefinition {
     std::uint16_t fixed_data_offset;
     std::uint16_t length;
     std::optional<bool> nullable;
+    std::optional<UsageMapReference> long_value_owned_pages;
+    std::optional<UsageMapReference> long_value_free_space_pages;
 };
 
 struct IndexColumnDefinition {
