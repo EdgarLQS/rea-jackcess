@@ -39,6 +39,7 @@ private:
     std::vector<Value> values_;
 
     friend class RowCursor;
+    friend class Table;
 };
 
 }

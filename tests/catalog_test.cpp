@@ -1,4 +1,5 @@
 #include "catalog/system_catalog.hpp"
+#include "catalog/complex_column.hpp"
 #include "catalog/property_map.hpp"
 #include "catalog/table_catalog.hpp"
 #include "catalog/table_definition.hpp"
@@ -404,6 +405,40 @@ void test_text_codec() {
           "UTF-16LE text was not decoded");
 }
 
+void test_complex_flat_table_key_resolution() {
+    using rea_jackcess::detail::ColumnDefinition;
+    using rea_jackcess::detail::TableDefinition;
+
+    const auto column = [](std::string name, std::uint8_t type, std::uint8_t flags = 0,
+                           bool complex_foreign_key = false) {
+        ColumnDefinition result{};
+        result.name = std::move(name);
+        result.type = type;
+        result.flags = flags;
+        result.complex_value_foreign_key = complex_foreign_key;
+        return result;
+    };
+
+    TableDefinition type_table{};
+    type_table.columns.push_back(column("Value", 0x04));
+
+    TableDefinition flat_table{};
+    flat_table.columns.push_back(column("Id", 0x04, 0x04));
+    flat_table.columns.push_back(column("LinkFirst", 0x04));
+    flat_table.columns.push_back(column("Value", 0x04));
+    flat_table.columns.push_back(column("LinkLast", 0x04));
+
+    auto keys = rea_jackcess::detail::find_complex_flat_table_keys(type_table, flat_table);
+    check(keys.primary_key_column_name == "Id", "complex flat table did not select its AutoNumber primary key");
+    check(keys.foreign_key_column_name == "LinkLast",
+          "unflagged complex foreign-key fallback did not select the last extra LONG column");
+
+    flat_table.columns[1].complex_value_foreign_key = true;
+    keys = rea_jackcess::detail::find_complex_flat_table_keys(type_table, flat_table);
+    check(keys.foreign_key_column_name == "LinkFirst",
+          "complex foreign-key flag did not take precedence over the unflagged fallback");
+}
+
 void test_jet4_value_decoding() {
     const auto path = make_database_fixture();
     try {
@@ -438,12 +473,14 @@ void test_jet4_value_decoding() {
               "NUMERIC value was not decoded using its scale");
 
         const auto date_value = decode(0x08, {0, 0, 0, 0, 0, 0, 0, 0});
-        check(std::get<rea_jackcess::detail::DateTimeValue>(date_value).iso8601 == "1899-12-30T00:00:00",
+        // Java's LocalDateTime.toString() drops a zero seconds field, and the CSV export has to
+        // repeat that text, so the decoded form does too.
+        check(std::get<rea_jackcess::detail::DateTimeValue>(date_value).iso8601 == "1899-12-30T00:00",
               "SHORT_DATE_TIME zero serial was not decoded from the Access epoch");
 
-        const auto out_of_range_date = decode(0x08, {0, 0, 0, 0, 0, 0, 0xf0, 0xbf});
-        check(std::get<rea_jackcess::detail::DateOutOfRangeValue>(out_of_range_date).serial == -1.0,
-              "negative SHORT_DATE_TIME serial was not preserved as out of range");
+        const auto pre_epoch_date = decode(0x08, {0, 0, 0, 0, 0, 0, 0xf0, 0xbf});
+        check(std::get<rea_jackcess::detail::DateTimeValue>(pre_epoch_date).iso8601 == "1899-12-29T00:00",
+              "negative SHORT_DATE_TIME serial was not decoded as a pre-epoch date");
 
         std::vector<std::uint8_t> extended_date;
         extended_date.insert(extended_date.end(), 19, '0');
@@ -455,7 +492,7 @@ void test_jet4_value_decoding() {
         extended_date.push_back(0);
         const auto extended_date_value = decode(0x14, std::move(extended_date));
         check(std::get<rea_jackcess::detail::DateTimeValue>(extended_date_value).iso8601 ==
-                  "0001-01-01T00:00:00",
+                  "0001-01-01T00:00",
               "EXT_DATE_TIME was not decoded from the year-one epoch");
 
         std::vector<std::uint8_t> inline_memo(16, 0);
@@ -573,12 +610,68 @@ void test_column_property_map_nullability() {
         property_bytes.insert(property_bytes.end(), column_name.begin(), column_name.end());
         write_u32(property_bytes, column_map, static_cast<std::uint32_t>(property_bytes.size() - column_map));
         append_u16(property_bytes, 9);
-        property_bytes.push_back(0);
+        property_bytes.push_back(0x81);
         property_bytes.push_back(0x01);
         append_u16(property_bytes, 0);
         append_u16(property_bytes, 1);
         property_bytes.push_back(1);
         write_u32(property_bytes, values_block, static_cast<std::uint32_t>(property_bytes.size() - values_block));
+
+        auto maps = rea_jackcess::detail::read_property_maps(file, "TestTable", 7, 3, property_bytes);
+        rea_jackcess::detail::decode_property_values(file, "TestTable", 7, 3, maps);
+        check(maps.size() == 1 && maps.front().name == "FieldA" && maps.front().type_code == 1 &&
+                  maps.front().properties.size() == 1,
+              "named column property map was not retained");
+        const auto& property = maps.front().properties.front();
+        check(property.name == "Required" && property.type_code == 1 && property.flags == 0x81 &&
+                  property.raw_value == std::vector<std::uint8_t>{1} && std::get<bool>(property.value),
+              "property type, whole flag byte or value was lost");
+
+        maps.front().properties = {
+            {"Description", 0x0c, 0, utf16le(u"inline memo"), {}, {}},
+            {"Payload", 0x0b, 0, {0xde, 0xad}, {}, {}},
+            {"gUiD", 0x09, 0, std::vector<std::uint8_t>(16, 0), {}, {}},
+            {"Unknown", 0xfe, 0, {0x42}, {}, {}},
+        };
+        rea_jackcess::detail::decode_property_values(file, "TestTable", 7, 3, maps);
+        const auto& inline_properties = maps.front().properties;
+        check(std::get<std::string>(inline_properties[0].value) == "inline memo" &&
+                  std::get<rea_jackcess::BlobValue>(inline_properties[1].value).bytes ==
+                      std::vector<std::uint8_t>({0xde, 0xad}) &&
+                  std::get<rea_jackcess::GuidValue>(inline_properties[2].value).text ==
+                      "{00000000-0000-0000-0000-000000000000}" &&
+                  std::holds_alternative<rea_jackcess::UnsupportedValue>(inline_properties[3].value) &&
+                  inline_properties[3].raw_value == std::vector<std::uint8_t>{0x42},
+              "inline property values did not follow the stored property type rules");
+
+        // The same name may appear in differently typed blocks. Preserve both entries
+        // and their raw flags/payloads, including an unknown type and record padding.
+        maps.push_back({"字段", 1, {{"Shared", 0xfe, 0xf1, {0x11}, {0x22}, {}}}});
+        maps.push_back({"字段", 2, {{"Shared", 0x09, 0x02, {0x33}, {}, {}}}});
+        const auto serialized = rea_jackcess::detail::encode_property_maps(maps);
+        const auto round_trip =
+            rea_jackcess::detail::read_property_maps(file, "TestTable", 7, 3, serialized);
+        check(round_trip.size() == 3 && round_trip[1].name == "字段" && round_trip[2].name == "字段" &&
+                  round_trip[1].type_code == 1 && round_trip[2].type_code == 2,
+              "property serialization merged distinct named blocks");
+        const auto& unknown = round_trip[1].properties.front();
+        check(unknown.name == "Shared" && unknown.type_code == 0xfe && unknown.flags == 0xf1 &&
+                  unknown.raw_value == std::vector<std::uint8_t>{0x11} &&
+                  unknown.trailing_bytes == std::vector<std::uint8_t>{0x22} &&
+                  round_trip[2].properties.front().raw_value == std::vector<std::uint8_t>{0x33},
+              "property serialization dropped unknown data or changed property metadata");
+        check(rea_jackcess::detail::encode_property_maps(round_trip) == serialized,
+              "property serialization was not stable after parsing");
+
+        const auto* from_column = maps[1].find("sHaReD");
+        const auto* from_index = maps[2].find("shared");
+        check(from_column && from_index && from_column->flags == 0xf1 && from_index->flags == 0x02,
+              "property lookup crossed map boundaries or compared names case sensitively");
+        maps[1].put({"shared", 0x09, 0x91, {0x44}, {}, {}});
+        check(maps[1].properties.size() == 1 && maps[1].properties.front().flags == 0x91,
+              "put did not replace the case-insensitive match");
+        check(maps[1].remove("Shared") && !maps[1].remove("shared") && maps[2].find("Shared"),
+              "removing one property altered the other named block");
 
         const auto nullable = rea_jackcess::detail::read_column_nullability(
             file, "TestTable", 7, 3, {"FieldA", "FieldB"}, property_bytes);
@@ -638,6 +731,166 @@ void test_text_property_reads_only_the_default_map() {
     }
     std::error_code ignored;
     std::filesystem::remove(path, ignored);
+}
+
+void test_property_map_type_inference_and_null_values() {
+    rea_jackcess::PropertyMapInfo properties{"", 0, {}};
+    struct BuiltInProperty {
+        const char* name;
+        std::uint8_t type_code;
+        std::uint8_t flags;
+    };
+    constexpr BuiltInProperty built_ins[] = {
+        {"AccessVersion", 0x0a, 0}, {"Title", 0x0a, 0}, {"Author", 0x0a, 0}, {"Company", 0x0a, 0},
+        {"DefaultValue", 0x0c, 0x01}, {"Expression", 0x0c, 0x01},
+        {"Required", 0x01, 0x01}, {"AllowZeroLength", 0x01, 0x01},
+        {"DecimalPlaces", 0x02, 0x01}, {"ResultType", 0x02, 0x01},
+        {"Format", 0x0a, 0x01}, {"InputMask", 0x0a, 0x01},
+        {"ValidationRule", 0x0a, 0x01}, {"ValidationText", 0x0a, 0x01},
+        {"Caption", 0x0c, 0}, {"Description", 0x0c, 0},
+        {"GUID", 0x09, 0x01}, {"DisplayControl", 0x03, 0},
+        {"TextFormat", 0x02, 0}, {"IMEMode", 0x02, 0}, {"IMESentenceMode", 0x02, 0},
+    };
+    for (const auto& expected : built_ins) {
+        const auto& inserted = properties.put(expected.name, rea_jackcess::Value{});
+        check(inserted.type_code == expected.type_code && inserted.flags == expected.flags &&
+                  inserted.value_is_null,
+              std::string("built-in property defaults were wrong for ") + expected.name);
+    }
+
+    properties.put("Format", rea_jackcess::Value{});
+    properties.put("Required", rea_jackcess::Value{true});
+    properties.put("byteprop", rea_jackcess::Value{std::int8_t{7}});
+    properties.put("shortprop", rea_jackcess::Value{std::int16_t{7}});
+    properties.put("strprop", rea_jackcess::Value{std::string("this is a string")});
+    properties.put("boolprop", rea_jackcess::Value{true});
+    properties.put("intprop", rea_jackcess::Value{std::int32_t{37}});
+    properties.put("floatprop", rea_jackcess::Value{1.5f});
+    properties.put("doubleprop", rea_jackcess::Value{2.5});
+    properties.put("dateprop", rea_jackcess::Value{
+        rea_jackcess::DateTimeValue{"2024-02-29T12:34:56.123"}});
+    properties.put("blobprop", rea_jackcess::Value{
+        rea_jackcess::BlobValue{{0xde, 0xad}}});
+    properties.put("bigprop", rea_jackcess::Value{std::int64_t{37}});
+    properties.put("GUID", rea_jackcess::Value{
+        rea_jackcess::GuidValue{"00112233-4455-6677-8899-aabbccddeeff"}});
+
+    const auto* null_format = properties.find("format");
+    const auto* required = properties.find("Required");
+    const auto* byte = properties.find("byteprop");
+    const auto* short_integer = properties.find("shortprop");
+    const auto* text = properties.find("strprop");
+    const auto* boolean = properties.find("boolprop");
+    const auto* integer = properties.find("intprop");
+    const auto* single = properties.find("floatprop");
+    const auto* double_precision = properties.find("doubleprop");
+    const auto* date = properties.find("dateprop");
+    const auto* blob = properties.find("blobprop");
+    const auto* large_integer = properties.find("bigprop");
+    const auto* guid = properties.find("guid");
+    check(null_format && null_format->type_code == 0x0a && null_format->flags == 0x01 &&
+              null_format->value_is_null,
+          "the built-in Format property did not infer TEXT, its DDL flag, and null state");
+    check(required && required->type_code == 0x01 && required->flags == 0x01 &&
+              std::get_if<bool>(&required->value) && *std::get_if<bool>(&required->value),
+          "the built-in Required property did not infer BOOLEAN and its DDL flag");
+    check(text && text->type_code == 0x0a && text->flags == 0 &&
+              std::get_if<std::string>(&text->value) && *std::get_if<std::string>(&text->value) == "this is a string",
+          "string property type inference failed");
+    check(byte && short_integer && single && double_precision && byte->type_code == 0x02 &&
+              short_integer->type_code == 0x03 && single->type_code == 0x06 &&
+              double_precision->type_code == 0x07 && boolean && integer &&
+              boolean->type_code == 0x01 && integer->type_code == 0x04 &&
+              date && date->type_code == 0x08 && date->raw_value.size() == 8 &&
+              blob && blob->type_code == 0x0b && large_integer && large_integer->type_code == 0x13,
+          "scalar, date, or binary property type inference failed");
+    check(guid && guid->type_code == 0x09 && guid->raw_value.size() == 16,
+          "the built-in GUID property did not encode a binary UUID");
+    const auto fallback = rea_jackcess::Value{std::string("fallback")};
+    const auto required_value = properties.get_value("required");
+    const auto null_value = properties.get_value("Format", fallback);
+    const auto missing_value = properties.get_value("Missing", fallback);
+    check(std::get_if<bool>(&required_value) && *std::get_if<bool>(&required_value) &&
+              std::get_if<std::string>(&null_value) && *std::get_if<std::string>(&null_value) == "fallback" &&
+              std::get_if<std::string>(&missing_value) && *std::get_if<std::string>(&missing_value) == "fallback",
+          "get_value did not apply case-insensitive lookup and absent/null defaults");
+
+    auto* mutable_text = properties.find("STRPROP");
+    check(mutable_text != nullptr, "property lookup was case sensitive");
+    mutable_text->set_value(rea_jackcess::Value{std::string("updated")});
+    check(std::get_if<std::string>(&mutable_text->value) &&
+              *std::get_if<std::string>(&mutable_text->value) == "updated",
+          "set_value did not update the in-memory typed property value");
+
+    const auto path = make_database_fixture();
+    try {
+        const auto file = rea_jackcess::detail::PageFile::open(path);
+        const auto encoded = rea_jackcess::detail::encode_property_maps({properties});
+        auto round_trip = rea_jackcess::detail::read_property_maps(file, "MSysObjects", 4, 0, encoded);
+        rea_jackcess::detail::decode_property_values(file, "MSysObjects", 4, 0, round_trip);
+        const auto* restored_text = round_trip.front().find("strprop");
+        const auto* restored_date = round_trip.front().find("dateprop");
+        check(restored_text && std::get_if<std::string>(&restored_text->value) &&
+                  *std::get_if<std::string>(&restored_text->value) == "updated" &&
+                  restored_date && std::get_if<rea_jackcess::DateTimeValue>(&restored_date->value),
+              "inferred text or SHORT_DATE_TIME property did not survive serialization");
+
+        rea_jackcess::PropertyMapInfo null_only{"", 0, {}};
+        null_only.put("Format", rea_jackcess::Value{});
+        const auto null_bytes = rea_jackcess::detail::encode_property_maps({null_only});
+        const auto null_round_trip =
+            rea_jackcess::detail::read_property_maps(file, "MSysObjects", 4, 0, null_bytes);
+        check(null_round_trip.size() == 1 && null_round_trip.front().properties.empty(),
+              "a null property value was written as a value record");
+    } catch (...) {
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+        throw;
+    }
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+
+    bool unsupported_inference_rejected = false;
+    try {
+        properties.put("decimalprop", rea_jackcess::Value{rea_jackcess::DecimalValue{"1.25"}});
+    } catch (const std::invalid_argument&) {
+        unsupported_inference_rejected = true;
+    }
+    check(unsupported_inference_rejected,
+          "an unsupported inferred value type was accepted without an explicit Jet type");
+
+    rea_jackcess::PropertyMapInfo unicode_properties{"", 0, {}};
+    unicode_properties.put(std::string(u8"müller"), rea_jackcess::Value{std::string("first")});
+    unicode_properties.put(std::string(u8"MÜLLER"), rea_jackcess::Value{std::string("updated")});
+    unicode_properties.put(std::string(u8"straße"), rea_jackcess::Value{std::string("sharp-s")});
+    unicode_properties.put("STRASSE", rea_jackcess::Value{std::string("expanded")});
+    const auto* unicode_property = unicode_properties.find(std::string(u8"MüLlEr"));
+    const auto* expanded_property = unicode_properties.find(std::string(u8"straße"));
+    check(unicode_properties.properties.size() == 2 && unicode_property &&
+              std::get_if<std::string>(&unicode_property->value) &&
+              *std::get_if<std::string>(&unicode_property->value) == "updated" &&
+              expanded_property && std::get_if<std::string>(&expanded_property->value) &&
+              *std::get_if<std::string>(&expanded_property->value) == "expanded",
+          "property lookup and replacement did not apply Locale.ROOT uppercase normalization");
+
+    rea_jackcess::PropertyMapInfo explicitly_typed{"", 0, {}};
+    explicitly_typed.put(
+        "Budget", std::uint8_t{0x05}, rea_jackcess::Value{rea_jackcess::DecimalValue{"1.2500"}}, true);
+    explicitly_typed.put("Required", std::uint8_t{0x03}, rea_jackcess::Value{std::int16_t{1}});
+    const auto* money = explicitly_typed.find("Budget");
+    const auto* typed_builtin = explicitly_typed.find("Required");
+    check(money && money->type_code == 0x05 && money->flags == 0x01 && money->raw_value.size() == 8 &&
+              typed_builtin && typed_builtin->type_code == 0x03 && typed_builtin->flags == 0x01,
+          "explicit property type or DDL flag handling failed");
+
+    rea_jackcess::PropertyInfo copied_property{"Copied", 0x04, 0xf1, {}, {}, {}};
+    copied_property.set_value(rea_jackcess::Value{std::int32_t{9}});
+    rea_jackcess::PropertyMapInfo copied_properties{"", 0, {}};
+    copied_properties.put_all({copied_property});
+    const auto* copied = copied_properties.find("copied");
+    check(copied && copied->flags == 0xf1 && std::get_if<std::int32_t>(&copied->value) &&
+              *std::get_if<std::int32_t>(&copied->value) == 9,
+          "put_all did not preserve the complete flags byte and typed value");
 }
 
 void test_table_context_is_preserved_for_usage_map_errors() {
@@ -827,12 +1080,14 @@ void test_error_contains_row_and_column_context() {
 int main() {
     try {
         test_text_codec();
+        test_complex_flat_table_key_resolution();
         test_jet4_value_decoding();
         test_sha256_and_jet4_code_page();
         test_usage_map_and_system_catalog();
         test_table_schema_catalog();
         test_column_property_map_nullability();
         test_text_property_reads_only_the_default_map();
+        test_property_map_type_inference_and_null_values();
         test_table_context_is_preserved_for_usage_map_errors();
         test_public_database_table_and_row_cursor();
         test_public_index_row_cursor();

@@ -1,5 +1,6 @@
 #include "table_definition.hpp"
 
+#include "../format/jet_format.hpp"
 #include "../page/page_types.hpp"
 #include "../value/text_codec.hpp"
 
@@ -38,8 +39,28 @@ constexpr std::uint16_t maximum_index_name_bytes = 128;
 constexpr std::uint16_t maximum_index_columns = 10;
 constexpr std::uint16_t unused_index_column = 0xffff;
 constexpr std::uint8_t ascending_column_flag = 0x01;
+constexpr std::uint8_t text_type = 0x0a;
 constexpr std::uint8_t ole_type = 0x0b;
 constexpr std::uint8_t memo_type = 0x0c;
+constexpr std::uint8_t complex_type = 0x12;
+constexpr std::uint8_t complex_value_foreign_key_flag = 0x08;
+constexpr std::uint8_t calculated_column_flags = 0xc0;
+constexpr std::uint64_t ace_complex_id_offset = 11;
+
+bool has_ace_complex_columns(EngineVersion version) {
+    switch (version) {
+        case EngineVersion::ace2007:
+        case EngineVersion::ace2010:
+        case EngineVersion::ace2016:
+        case EngineVersion::ace2019:
+            return true;
+        case EngineVersion::jet3:
+        case EngineVersion::jet4:
+        case EngineVersion::msisam:
+            return false;
+    }
+    return false;
+}
 
 [[noreturn]] void corrupted_page(const PageFile& file,
                                  std::uint64_t page_number,
@@ -177,9 +198,9 @@ std::int32_t signed_u32(std::uint32_t value) {
 }
 
 TableDefinition read_table_definition(const PageFile& file, std::uint64_t page_number) {
-    if (file.format().version != EngineVersion::jet4) {
+    if (!has_jet4_page_layout(file.format().version)) {
         throw DatabaseError(DatabaseErrorCode::unsupported_version,
-                            "Jet4 table definition layout requested for a different engine version",
+                            "Jet4/ACE table definition layout requested for an unsupported engine version",
                             file.path(),
                             page_number);
     }
@@ -299,6 +320,21 @@ TableDefinition read_table_definition(const PageFile& file, std::uint64_t page_n
             read_u16(file, page_number, column_headers, offset + 21),
             read_u16(file, page_number, column_headers, offset + 23),
         });
+        auto& column = columns.back();
+        column.calculated = (column.extended_flags & calculated_column_flags) != 0;
+        column.complex_value_foreign_key =
+            (column.extended_flags & complex_value_foreign_key_flag) != 0;
+        if (column.type == complex_type && has_ace_complex_columns(file.format().version)) {
+            column.complex_type_id =
+                read_u32(file, page_number, column_headers, offset + ace_complex_id_offset);
+        }
+        if (column.type == text_type || column.type == memo_type) {
+            const auto lcid = read_u16(file, page_number, column_headers, offset + 11);
+            // Jet4 treats an absent LCID as General Legacy, even if the version byte is set.
+            column.text_sort_order = lcid == 0
+                ? Jet4TextSortOrder{1033, 0}
+                : Jet4TextSortOrder{lcid, column_headers[offset + 14]};
+        }
     }
     std::stable_sort(columns.begin(), columns.end(), [](const ColumnDefinition& left, const ColumnDefinition& right) {
         return left.column_number < right.column_number;

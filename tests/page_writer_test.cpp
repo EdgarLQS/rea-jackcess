@@ -102,6 +102,35 @@ void test_existing_and_appended_pages(const TemporaryDirectory& directory) {
     check(database.read_page(2) == appended, "appended page did not persist");
 }
 
+void test_rollback_across_writers(const TemporaryDirectory& directory) {
+    using rea_jackcess::DatabaseErrorCode;
+    using rea_jackcess::detail::PageFileWriter;
+    using rea_jackcess::detail::PageWriteUndo;
+    const auto path = directory.file("rollback.mdb");
+    write_database_header(path, 1, 4096);
+    PageWriteUndo undo(path, 2, 4096);
+    const std::vector<std::uint8_t> first(4096, 0x11);
+    const std::vector<std::uint8_t> second(4096, 0x22);
+    {
+        auto writer = PageFileWriter::open(path, &undo);
+        writer.write_page(1, first);
+        check(writer.append_page(first) == 2, "rollback fixture did not append a page");
+        writer.flush();
+    }
+    {
+        auto writer = PageFileWriter::open(path, &undo);
+        writer.write_page(1, second);
+        writer.write_page(2, second);
+        expect_error(DatabaseErrorCode::page_out_of_range, [&] { writer.write_page(3, second); });
+    }
+    check(undo.dirty(), "page writes did not record undo state");
+    undo.rollback();
+    auto reopened = rea_jackcess::DatabaseFile::open(path);
+    check(!undo.dirty() && reopened.page_count() == 2, "rollback did not discard appended pages");
+    check(reopened.read_page(1) == std::vector<std::uint8_t>(4096, 0),
+          "rollback did not restore the first before-image");
+}
+
 void test_unsupported_formats(const TemporaryDirectory& directory) {
     using rea_jackcess::DatabaseErrorCode;
     using rea_jackcess::detail::PageFileWriter;
@@ -139,6 +168,7 @@ int main() {
     try {
         TemporaryDirectory directory;
         test_existing_and_appended_pages(directory);
+        test_rollback_across_writers(directory);
         test_unsupported_formats(directory);
         std::cout << "page writer tests passed\n";
         return 0;

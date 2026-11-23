@@ -1,6 +1,7 @@
 #include "row_reader.hpp"
 
 #include "../page/data_page.hpp"
+#include "../format/jet_format.hpp"
 #include "usage_map.hpp"
 
 #include <cstddef>
@@ -90,6 +91,8 @@ std::vector<std::uint8_t> read_complete_row(const PageFile& file,
     }
 }
 
+}
+
 EncodedTableRow decode_row_layout(const PageFile& file,
                                   const std::string& table_name,
                                   std::uint64_t page_number,
@@ -176,8 +179,6 @@ EncodedTableRow decode_row_layout(const PageFile& file,
     return {page_number, row_number, std::move(values)};
 }
 
-}
-
 struct TableRowReader::Impl {
     Impl(const PageFile& source_file,
          std::string source_table_name,
@@ -185,11 +186,11 @@ struct TableRowReader::Impl {
         : file(source_file),
           table_name(std::move(source_table_name)),
           definition(source_definition) {
-        if (file.format().version != EngineVersion::jet4) {
+        if (!has_jet4_page_layout(file.format().version)) {
             DatabaseErrorContext context;
             context.table_name = table_name;
             throw DatabaseError(DatabaseErrorCode::unsupported_version,
-                                "Jet4 table row layout requested for a different engine version",
+                                "Jet4/ACE table row layout requested for an unsupported engine version",
                                 file.path(),
                                 std::nullopt,
                                 std::move(context));

@@ -108,7 +108,147 @@ int main(int argc, char** argv) {
                   "real sample FInheritable BOOLEAN bit count changed");
         }
 
-        std::cout << "real sample BOOLEAN reads passed\n";
+        {
+            // A real ArcGIS/Access-created index: GDB_ItemTypes.ObjectID is a single-column
+            // ascending LONG index, so seeks and ranges must match the full index scan.
+            const auto& item_types = require_table(tables, "GDB_ItemTypes");
+            check(item_types.row_count_header() == 34,
+                  "real sample GDB_ItemTypes changed its row count");
+            const std::size_t object_id = column_index(item_types, "ObjectID");
+
+            std::vector<std::int32_t> keys;
+            auto cursor = item_types.rows_by_index("FDO_ObjectID");
+            while (const auto row = cursor.next()) {
+                keys.push_back(std::get<std::int32_t>(row->at(object_id)));
+            }
+            check(keys.size() == 34 && std::is_sorted(keys.begin(), keys.end()),
+                  "real sample FDO_ObjectID is not a sorted 34-entry index");
+
+            const auto seek_from = [&](std::int32_t start) {
+                std::vector<std::int32_t> values;
+                auto seek = item_types.rows_by_index_from("FDO_ObjectID", start);
+                while (const auto row = seek.next()) {
+                    values.push_back(std::get<std::int32_t>(row->at(object_id)));
+                }
+                return values;
+            };
+            const auto suffix = [&](std::int32_t start) {
+                const auto first = std::lower_bound(keys.begin(), keys.end(), start);
+                return std::vector<std::int32_t>(first, keys.end());
+            };
+            check(seek_from(keys.front()) == keys,
+                  "real sample seek from the first key did not return the whole index");
+            check(seek_from(18) == suffix(18),
+                  "real sample seek did not match the index suffix");
+            check(seek_from(keys.back() + 1).empty(),
+                  "real sample seek past the last key returned rows");
+
+            std::vector<std::int32_t> range;
+            auto ranged = item_types.rows_by_index_range("FDO_ObjectID", 5, 9);
+            while (const auto row = ranged.next()) {
+                range.push_back(std::get<std::int32_t>(row->at(object_id)));
+            }
+            check(range == std::vector<std::int32_t>({5, 6, 7, 8}),
+                  "real sample range [5,9) did not return 5..8");
+
+            const auto hit = item_types.find_row_by_index("FDO_ObjectID", 18);
+            check(hit && std::get<std::int32_t>(hit->at(object_id)) == 18,
+                  "real sample exact index lookup missed an existing key");
+            check(!item_types.find_row_by_index("FDO_ObjectID", keys.back() + 1),
+                  "real sample exact index lookup matched a missing key");
+
+            const auto label = column_index(item_types, "Name");
+            auto text_scan = item_types.rows_by_index("CatItemTypesByName");
+            const auto first_label = text_scan.next();
+            check(first_label.has_value(), "real sample TEXT index is empty");
+            const auto text_hit = item_types.find_row_by_index("CatItemTypesByName", first_label->at(label));
+            check(text_hit && text_hit->id() == first_label->id(),
+                  "real sample TEXT index lookup missed its first row");
+            auto text_seek = item_types.rows_by_index_from("CatItemTypesByName", first_label->at(label));
+            const auto first_seek = text_seek.next();
+            check(first_seek && first_seek->id() == first_label->id(),
+                  "real sample TEXT index seek did not start at its first row");
+        }
+
+        {
+            // Writing into an existing ArcGIS/Access table: GDB_SpatialRefs has a single
+            // ascending LONG index and no Memo/OLE long-value map of its own, so a row can be
+            // inserted and removed against the original index pages. Work on a copy only.
+            const auto copy = std::filesystem::temp_directory_path() /
+                              "rea-jackcess-real-sample-write.mdb";
+            std::filesystem::remove(copy);
+            std::filesystem::copy_file(path, copy);
+
+            const std::int32_t inserted_srid = 4242;
+            {
+                auto writable = rea_jackcess::Database::open(
+                    copy, rea_jackcess::DatabaseOpenMode::read_write);
+                auto writable_tables = writable.tables();
+                auto table = std::find_if(writable_tables.begin(),
+                                          writable_tables.end(),
+                                          [](const auto& candidate) {
+                                              return candidate.name() == "GDB_SpatialRefs";
+                                          });
+                check(table != writable_tables.end(),
+                      "writable real sample did not expose GDB_SpatialRefs");
+                check(table->row_count_header() == 3,
+                      "real sample GDB_SpatialRefs changed its row count");
+
+                std::vector<rea_jackcess::Value> row;
+                for (const auto& column : table->columns()) {
+                    if (column.name == "SRID") {
+                        row.push_back(inserted_srid);
+                    } else if (column.name == "SRTEXT") {
+                        row.push_back(rea_jackcess::MemoValue{std::string("GEOGCS[\"test\"]"), {}});
+                    } else if (column.type == rea_jackcess::DataType::float64) {
+                        row.push_back(1.0);
+                    } else if (column.type == rea_jackcess::DataType::int32) {
+                        row.push_back(std::int32_t{0});
+                    } else {
+                        row.push_back(std::monostate{});
+                    }
+                }
+                const auto row_id = table->add_row(row);
+                check(table->row_count_header() == 4,
+                      "inserting into a real Access table did not raise the row count");
+
+                const auto srid = column_index(*table, "SRID");
+                std::vector<std::int32_t> keys;
+                auto cursor = table->rows_by_index("SRID_Index");
+                while (const auto current = cursor.next()) {
+                    keys.push_back(std::get<std::int32_t>(current->at(srid)));
+                }
+                check(keys == std::vector<std::int32_t>({1, 2, 3, inserted_srid}),
+                      "the real table index did not include the inserted row in order");
+                const auto found = table->find_row_by_index("SRID_Index", inserted_srid);
+                check(found && std::get<std::int32_t>(found->at(srid)) == inserted_srid,
+                      "key lookup failed on a row inserted into the real table");
+
+                table->delete_row(row_id);
+                check(table->row_count_header() == 3,
+                      "deleting from a real Access table did not lower the row count");
+            }
+
+            const auto reopened = rea_jackcess::Database::open(copy);
+            for (const auto& current : reopened.tables()) {
+                if (current.name() != "GDB_SpatialRefs") {
+                    continue;
+                }
+                check(current.row_count_header() == 3,
+                      "reopened real table copy has an unexpected row count");
+                const auto srid = column_index(current, "SRID");
+                std::vector<std::int32_t> keys;
+                auto cursor = current.rows_by_index("SRID_Index");
+                while (const auto row = cursor.next()) {
+                    keys.push_back(std::get<std::int32_t>(row->at(srid)));
+                }
+                check(keys == std::vector<std::int32_t>({1, 2, 3}),
+                      "the real table index did not return to its original keys");
+            }
+            std::filesystem::remove(copy);
+        }
+
+        std::cout << "real sample reads, index seeks and table writes passed\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "real sample BOOLEAN reads failed: " << error.what() << '\n';

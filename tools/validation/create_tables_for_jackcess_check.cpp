@@ -25,13 +25,24 @@ int main(int argc, char** argv) {
     const bool variable_row_shrink = mode == "--variable-rows";
     const bool variable_rows = variable_row_growth || variable_row_shrink;
     const bool long_value_rows = mode == "--long-value-rows";
+    const bool long_value_reuse = mode == "--long-value-reuse";
+    const bool index_schema = mode == "--index-schema";
+    const bool index_rows = mode == "--index-rows";
+    const bool index_maintenance = mode == "--index-maintenance";
+    const bool index_money = mode == "--index-money";
+    const bool index_split = mode == "--index-split";
+    const bool index_merge = mode == "--index-merge";
+    const bool index_guid = mode == "--index-guid";
+    const bool index_desc = mode == "--index-desc";
     const bool writes_rows = batch_rows || update_row || delete_row || fixed_numeric_rows ||
-                             money_rows || guid_rows || boolean_rows || variable_rows || long_value_rows;
+                             money_rows || guid_rows || boolean_rows || variable_rows || long_value_rows ||
+                             long_value_reuse || index_rows || index_maintenance || index_money ||
+                             index_split || index_merge || index_guid || index_desc;
     const bool v2003 = argc == 4 && std::string(argv[3]) == "--v2003";
     if (argc > 4 || (argc >= 3 && !single_table && !maximum_definition && !writes_rows &&
-                     !money_empty && !boolean_empty)) {
+                     !money_empty && !boolean_empty && !index_schema)) {
         std::cerr << "Usage: create_tables_for_jackcess_check <database.mdb> "
-                     "[--single|--maximum-definition|--batch-rows|--update-row|--delete-row|--fixed-numeric-rows|--money-rows|--money-empty|--guid-rows|--boolean-rows|--boolean-empty|--variable-rows-growth|--variable-rows|--long-value-rows] [--v2003]\n";
+                     "[--single|--maximum-definition|--batch-rows|--update-row|--delete-row|--fixed-numeric-rows|--money-rows|--money-empty|--guid-rows|--boolean-rows|--boolean-empty|--variable-rows-growth|--variable-rows|--long-value-rows|--long-value-reuse|--index-schema|--index-rows|--index-maintenance|--index-money|--index-split|--index-merge|--index-guid|--index-desc] [--v2003]\n";
         return 2;
     }
 
@@ -61,6 +72,40 @@ int main(int argc, char** argv) {
         guid_table.add_column("Id", rea_jackcess::DataType::int32)
             .add_column("Uuid", rea_jackcess::DataType::guid);
 
+        rea_jackcess::TableBuilder indexed_table("Indexed");
+        indexed_table.add_column("Id", rea_jackcess::DataType::int32)
+            .add_column("Code", rea_jackcess::DataType::int32)
+            .add_column("Name", rea_jackcess::DataType::text)
+            .add_index(rea_jackcess::IndexBuilder("IX_Id", "Id"))
+            .add_index(rea_jackcess::IndexBuilder("IX_Code", "Code"));
+
+        rea_jackcess::TableBuilder money_index_table("MoneyIndexed");
+        money_index_table.add_column("Id", rea_jackcess::DataType::int32)
+            .add_column("Amount", rea_jackcess::DataType::money)
+            .add_index(rea_jackcess::IndexBuilder("IX_Amount", "Amount"));
+
+        rea_jackcess::TableBuilder guid_index_table("GuidIndexed");
+        guid_index_table.add_column("Id", rea_jackcess::DataType::int32)
+            .add_column("Uuid", rea_jackcess::DataType::guid)
+            .add_index(rea_jackcess::IndexBuilder("IX_Uuid", "Uuid"));
+
+        rea_jackcess::TableBuilder desc_index_table("Desc");
+        desc_index_table.add_column("Id", rea_jackcess::DataType::int32)
+            .add_index(rea_jackcess::IndexBuilder("IX_Id", "Id", false, true));
+
+        rea_jackcess::TableBuilder merge_table("Merge");
+        merge_table.add_column("Id", rea_jackcess::DataType::int32)
+            .add_index(rea_jackcess::IndexBuilder("IX_Id", "Id"));
+
+        rea_jackcess::TableBuilder split_table("Split");
+        split_table.add_column("Id", rea_jackcess::DataType::int32)
+            .add_index(rea_jackcess::IndexBuilder("IX_Id", "Id"));
+
+        rea_jackcess::TableBuilder reuse_table("Reuse");
+        reuse_table.add_column("Id", rea_jackcess::DataType::int32)
+            .add_column("Memo", rea_jackcess::DataType::memo)
+            .add_column("Tail", rea_jackcess::DataType::int32);
+
         rea_jackcess::TableBuilder boolean_table("Booleans");
         boolean_table.add_column("Id", rea_jackcess::DataType::int32)
             .add_column("Flag", rea_jackcess::DataType::boolean)
@@ -80,12 +125,26 @@ int main(int argc, char** argv) {
             .add_column("Payload", rea_jackcess::DataType::ole);
 
         rea_jackcess::TableBuilder* selected_table = &first_table;
-        if (long_value_rows) {
+        if (index_desc) {
+            selected_table = &desc_index_table;
+        } else if (index_guid) {
+            selected_table = &guid_index_table;
+        } else if (index_merge) {
+            selected_table = &merge_table;
+        } else if (index_split) {
+            selected_table = &split_table;
+        } else if (index_schema || index_rows || index_maintenance) {
+            selected_table = &indexed_table;
+        } else if (long_value_reuse) {
+            selected_table = &reuse_table;
+        } else if (long_value_rows) {
             selected_table = &long_value_table;
         } else if (variable_rows) {
             selected_table = &variable_table;
         } else if (fixed_numeric_rows) {
             selected_table = &fixed_numeric_table;
+        } else if (index_money) {
+            selected_table = &money_index_table;
         } else if (money_rows || money_empty) {
             selected_table = &money_table;
         } else if (guid_rows) {
@@ -104,7 +163,7 @@ int main(int argc, char** argv) {
                                            rea_jackcess::DataType::int32);
                 }
                 tables = {large_table};
-            } else if (!writes_rows && !money_empty && !boolean_empty) {
+            } else if (!writes_rows && !money_empty && !boolean_empty && !index_schema) {
                 tables.push_back(second_table);
             }
         }
@@ -124,13 +183,32 @@ int main(int argc, char** argv) {
             auto database = rea_jackcess::Database::open(
                 argv[1], rea_jackcess::DatabaseOpenMode::read_write);
             auto tables_after_open = database.tables();
-            const std::string expected_table_name = long_value_rows
-                                                        ? "LongValues"
-                                                        : (variable_rows ? "Variable"
-                                                                         : (money_rows ? "MoneyValues"
-                                                                                       : (guid_rows ? "Guids"
-                                                                                                    : (boolean_rows ? "Booleans"
-                                                                                                                    : "T"))));
+            std::string expected_table_name = "T";
+            if (long_value_reuse) {
+                expected_table_name = "Reuse";
+            } else if (long_value_rows) {
+                expected_table_name = "LongValues";
+            } else if (variable_rows) {
+                expected_table_name = "Variable";
+            } else if (money_rows) {
+                expected_table_name = "MoneyValues";
+            } else if (guid_rows) {
+                expected_table_name = "Guids";
+            } else if (index_money) {
+                expected_table_name = "MoneyIndexed";
+            } else if (index_guid) {
+                expected_table_name = "GuidIndexed";
+            } else if (index_desc) {
+                expected_table_name = "Desc";
+            } else if (index_merge) {
+                expected_table_name = "Merge";
+            } else if (index_split) {
+                expected_table_name = "Split";
+            } else if (index_rows || index_maintenance) {
+                expected_table_name = "Indexed";
+            } else if (boolean_rows) {
+                expected_table_name = "Booleans";
+            }
             const auto table = std::find_if(tables_after_open.begin(), tables_after_open.end(),
                                             [&](const auto& candidate) {
                                                 return candidate.name() == expected_table_name;
@@ -157,6 +235,16 @@ int main(int argc, char** argv) {
                                   {std::int32_t{1}, rea_jackcess::MemoValue{updated_memo, {}}, std::string("tail"),
                                    rea_jackcess::BlobValue{updated_payload}});
                 std::cout << "Wrote and updated multi-page MEMO/OLE values, including Unicode, empty, and NULL rows\n";
+            } else if (long_value_reuse) {
+                const auto row_id = table->add_row(
+                    {std::int32_t{1}, rea_jackcess::MemoValue{std::string(300, 'A'), {}}, std::int32_t{7}});
+                for (const char fill : {'B', 'C', 'D', 'E'}) {
+                    table->update_row(row_id,
+                                      {std::int32_t{1},
+                                       rea_jackcess::MemoValue{std::string(300, fill), {}},
+                                       std::int32_t{7}});
+                }
+                std::cout << "Wrote and repeatedly updated a MEMO value that reuses one LVAL page\n";
             } else if (money_rows) {
                 const auto row_ids = table->add_rows({
                     {rea_jackcess::DecimalValue{"-2341234.03450"}},
@@ -178,6 +266,68 @@ int main(int argc, char** argv) {
                                   {std::int32_t{1},
                                    rea_jackcess::GuidValue{"{fedcba98-7654-3210-fedc-ba9876543210}"}});
                 std::cout << "Wrote and updated fixed-width GUID values\n";
+            } else if (index_rows) {
+                (void)table->add_rows({
+                    {std::int32_t{1}, std::int32_t{30}, std::string("a")},
+                    {std::int32_t{2}, std::int32_t{10}, std::string("b")},
+                    {std::int32_t{3}, std::int32_t{20}, std::string("c")},
+                });
+                std::cout << "Inserted rows and maintained both user indexes\n";
+            } else if (index_desc) {
+                (void)table->add_rows({{std::int32_t{3}}, {std::int32_t{1}}, {std::int32_t{2}}});
+                std::cout << "Inserted 3, 1, 2 into a descending index\n";
+            } else if (index_guid) {
+                const auto row_ids = table->add_rows({
+                    {std::int32_t{1}, rea_jackcess::GuidValue{"01000000-0000-0000-0000-000000000000"}},
+                    {std::int32_t{2}, rea_jackcess::GuidValue{"ffffffff-ffff-ffff-ffff-ffffffffffff"}},
+                    {std::int32_t{3}, rea_jackcess::GuidValue{"00000000-0000-0000-0000-000000000001"}},
+                    {std::int32_t{4}, rea_jackcess::GuidValue{"00000000-0000-0000-0000-00000000ff00"}},
+                });
+                table->update_row(row_ids[1],
+                                  {std::int32_t{2},
+                                   rea_jackcess::GuidValue{"00000000-0000-0000-0000-0000000000ff"}});
+                table->delete_row(row_ids[3]);
+                std::cout << "Inserted, updated and deleted GUID index rows\n";
+            } else if (index_merge) {
+                std::vector<std::vector<rea_jackcess::Value>> rows;
+                rows.reserve(700);
+                for (std::int32_t value = 1; value <= 700; ++value) {
+                    rows.push_back({value});
+                }
+                const auto row_ids = table->add_rows(rows);
+                // Draining the lowest leaf must unlink and release that page.
+                for (std::size_t index = 0; index < 400; ++index) {
+                    table->delete_row(row_ids[index]);
+                }
+                std::cout << "Inserted 700 rows and drained the first index leaf\n";
+            } else if (index_split) {
+                std::vector<std::vector<rea_jackcess::Value>> rows;
+                rows.reserve(700);
+                for (std::int32_t value = 1; value <= 700; ++value) {
+                    rows.push_back({value});
+                }
+                (void)table->add_rows(rows);
+                std::cout << "Inserted 700 rows, splitting the index leaf into several pages\n";
+            } else if (index_money) {
+                const auto row_ids = table->add_rows({
+                    {std::int32_t{1}, rea_jackcess::DecimalValue{"100.0000"}},
+                    {std::int32_t{2}, rea_jackcess::DecimalValue{"-0.0001"}},
+                    {std::int32_t{3}, rea_jackcess::DecimalValue{"-2341234.0345"}},
+                    {std::int32_t{4}, rea_jackcess::DecimalValue{"0"}},
+                    {std::int32_t{5}, std::monostate{}},
+                });
+                table->update_row(row_ids[0], {std::int32_t{1}, rea_jackcess::DecimalValue{"-5.5"}});
+                table->delete_row(row_ids[4]);
+                std::cout << "Inserted, updated and deleted MONEY rows with an indexed key\n";
+            } else if (index_maintenance) {
+                const auto row_ids = table->add_rows({
+                    {std::int32_t{1}, std::int32_t{30}, std::string("a")},
+                    {std::int32_t{2}, std::int32_t{10}, std::string("b")},
+                    {std::int32_t{3}, std::int32_t{20}, std::string("c")},
+                });
+                table->update_row(row_ids[0], {std::int32_t{1}, std::int32_t{25}, std::string("a")});
+                table->delete_row(row_ids[1]);
+                std::cout << "Inserted, updated and deleted indexed rows\n";
             } else if (boolean_rows) {
                 const auto row_ids = table->add_rows({
                     {std::int32_t{1}, true, false, std::int32_t{10}},

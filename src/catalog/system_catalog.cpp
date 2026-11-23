@@ -1,6 +1,8 @@
 #include "system_catalog.hpp"
 
+#include "property_map.hpp"
 #include "row_reader.hpp"
+#include "../format/jet_format.hpp"
 #include "../value/jet4_value.hpp"
 #include "../value/text_codec.hpp"
 
@@ -204,10 +206,11 @@ std::optional<std::vector<std::uint8_t>> read_property_bytes(const PageFile& fil
 
 std::vector<SystemCatalogObject> read_system_catalog_objects(const PageFile& file,
                                                               const TableDefinition& definition,
-                                                              std::optional<std::string_view> property_object_name) {
-    if (file.format().version != EngineVersion::jet4) {
+                                                              std::optional<std::string_view> property_object_name,
+                                                              bool read_link_fields) {
+    if (!has_jet4_page_layout(file.format().version)) {
         throw DatabaseError(DatabaseErrorCode::unsupported_version,
-                            "Jet4 system catalog layout requested for a different engine version",
+                            "Jet4/ACE system catalog layout requested for an unsupported engine version",
                             file.path());
     }
 
@@ -218,6 +221,9 @@ std::vector<SystemCatalogObject> read_system_catalog_objects(const PageFile& fil
     const auto& type_column = find_column(file, context_page, definition, "Type", short_type);
     const auto& flags_column = find_column(file, context_page, definition, "Flags", long_type);
     const auto* properties_column = find_optional_column(definition, "LvProp");
+    const auto* link_database = read_link_fields ? find_optional_column(definition, "Database") : nullptr;
+    const auto* link_table = read_link_fields ? find_optional_column(definition, "ForeignName") : nullptr;
+    const auto* connection = read_link_fields ? find_optional_column(definition, "Connect") : nullptr;
     const auto rows = read_table_rows(file, "MSysObjects", definition);
 
     std::vector<SystemCatalogObject> objects;
@@ -244,9 +250,79 @@ std::vector<SystemCatalogObject> read_system_catalog_objects(const PageFile& fil
                 object.property_error_page = error.page_number();
             }
         }
+        if (read_link_fields && (object.type == 4 || object.type == 6)) {
+            const auto read_link_value = [&](const ColumnDefinition* column) -> std::optional<std::string> {
+                if (!column) {
+                    return std::nullopt;
+                }
+                const auto value = decode_jet4_value(file, "MSysObjects", row, *column);
+                if (const auto* text = std::get_if<std::string>(&value)) {
+                    return *text;
+                }
+                if (const auto* memo = std::get_if<MemoValue>(&value)) {
+                    return memo->text;
+                }
+                if (std::holds_alternative<std::monostate>(value)) {
+                    return std::nullopt;
+                }
+                DatabaseErrorContext context;
+                context.table_name = "MSysObjects";
+                context.row_number = row.row_number;
+                context.column_name = column->name;
+                corrupted_row(file, row.page_number, "Linked table field is not text", std::move(context));
+            };
+            object.linked_database = read_link_value(link_database);
+            object.linked_table = read_link_value(link_table);
+            object.connection_string = read_link_value(connection);
+        }
         objects.push_back(std::move(object));
     }
     return objects;
+}
+
+FileFormat identify_file_format(const PageFile& file) {
+    switch (file.format().version) {
+        case EngineVersion::jet3: return FileFormat::v1997;
+        case EngineVersion::ace2007: return FileFormat::v2007;
+        case EngineVersion::ace2010: return FileFormat::v2010;
+        case EngineVersion::ace2016: return FileFormat::v2016;
+        case EngineVersion::ace2019: return FileFormat::v2019;
+        case EngineVersion::msisam: return FileFormat::msisam;
+        case EngineVersion::jet4: break;
+    }
+
+    const auto catalog = read_table_definition(file, 2);
+    const auto objects = read_system_catalog_objects(file, catalog, "MSysDb");
+    const auto object = std::find_if(objects.begin(), objects.end(), [](const auto& item) {
+        return item.name == "MSysDb" && item.type == 2;
+    });
+    if (object == objects.end()) {
+        return FileFormat::generic_jet4;
+    }
+    DatabaseErrorContext context;
+    context.table_name = "MSysDb";
+    context.row_number = object->row_number;
+    context.column_name = "LvProp";
+    if (object->property_error) {
+        throw DatabaseError(DatabaseErrorCode::corrupted_file, *object->property_error, file.path(),
+                            object->property_error_page, context);
+    }
+    if (!object->property_bytes) {
+        return FileFormat::generic_jet4;
+    }
+    const auto access = read_text_property(file, "MSysDb", object->page_number, object->row_number,
+                                           *object->property_bytes, "AccessVersion");
+    if (!access || access->find_first_not_of(" \t\r\n\f\v") == std::string::npos) {
+        return FileFormat::generic_jet4;
+    }
+    if (*access == "08.50") {
+        return FileFormat::v2000;
+    }
+    if (*access == "09.50") {
+        return FileFormat::v2003;
+    }
+    throw DatabaseError(DatabaseErrorCode::unsupported_version, "Unrecognized Jet4 AccessVersion",
+                        file.path(), object->page_number, context);
 }
 
 }

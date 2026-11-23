@@ -2,6 +2,7 @@
 
 #include "../page/data_page.hpp"
 #include "../page/page_types.hpp"
+#include "../format/jet_format.hpp"
 
 #include <set>
 
@@ -60,9 +61,9 @@ void add_bitmap_pages(const PageFile& file,
 }
 
 std::vector<std::uint64_t> read_usage_map_pages(const PageFile& file, const UsageMapReference& reference) {
-    if (file.format().version != EngineVersion::jet4) {
+    if (!has_jet4_page_layout(file.format().version)) {
         throw DatabaseError(DatabaseErrorCode::unsupported_version,
-                            "Jet4 usage map layout requested for a different engine version",
+                            "Jet4/ACE usage map layout requested for an unsupported engine version",
                             file.path(),
                             reference.page_number);
     }

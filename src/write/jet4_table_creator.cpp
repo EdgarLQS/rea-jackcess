@@ -1,6 +1,7 @@
 #include "jet4_table_creator.hpp"
 #include "jet4_fixed_type.hpp"
 #include "jet4_global_usage_map.hpp"
+#include "jet4_index_entry.hpp"
 #include "jet4_variable_type.hpp"
 
 #include "../util/little_endian.hpp"
@@ -42,6 +43,15 @@ constexpr std::uint64_t index_entry_mask_size = 453;
 constexpr std::uint64_t index_entry_data_offset = index_entry_mask_offset + index_entry_mask_size;
 constexpr std::uint64_t index_leaf_trailer_size = 4;
 constexpr std::uint32_t table_definition_magic = 0x659;
+constexpr std::uint32_t physical_index_magic = 1923;
+constexpr std::uint64_t physical_index_block_size = 52;
+constexpr std::uint64_t logical_index_block_size = 28;
+constexpr std::uint64_t index_row_count_block_size = 12;
+constexpr std::uint32_t maximum_indexes_per_table = 32;
+constexpr std::uint16_t maximum_index_columns = 10;
+constexpr std::uint16_t unused_index_column = 0xffff;
+constexpr std::uint8_t primary_index_type = 0x01;
+constexpr std::uint8_t ascending_index_column_flag = 0x01;
 constexpr std::uint8_t user_table_type = 0x4e;
 constexpr std::uint8_t short_type = jet4_short_type_code;
 constexpr std::uint8_t long_type = jet4_long_type_code;
@@ -138,7 +148,11 @@ void validate_table_builder(const std::filesystem::path& path, const TableBuilde
         if (jet4_fixed_type(column.type()) == nullptr && jet4_variable_type(column.type()) == nullptr &&
             !jet4_is_boolean_type(column.type())) {
             unsupported_operation(path,
-                                 "Initial Jet4 table creation currently supports BOOLEAN, BYTE, SHORT, LONG, MONEY, SINGLE, DOUBLE, GUID, TEXT, BINARY, MEMO, and OLE columns only");
+                                 "Initial Jet4 table creation currently supports BOOLEAN, BYTE, SHORT, LONG, MONEY, SINGLE, DOUBLE, SHORT_DATE_TIME, GUID, TEXT, BINARY, MEMO, and OLE columns only");
+        }
+        if (column.text_sort_order() && column.type() != DataType::text &&
+            column.type() != DataType::memo) {
+            unsupported_operation(path, "A text sort order can only be set on TEXT or MEMO columns");
         }
         if (std::any_of(names.begin(), names.end(), [&](std::string_view previous) {
                 return equals_ascii_case_insensitive(previous, column.name());
@@ -146,6 +160,59 @@ void validate_table_builder(const std::filesystem::path& path, const TableBuilde
             unsupported_operation(path, "Column names must be unique without regard to ASCII letter case");
         }
         names.push_back(column.name());
+    }
+
+    if (table.indexes().size() > maximum_indexes_per_table) {
+        unsupported_operation(path, "A Jet4 table supports at most 32 user indexes");
+    }
+    std::vector<std::string_view> index_names;
+    index_names.reserve(table.indexes().size());
+    bool has_primary_key = false;
+    for (const auto& index : table.indexes()) {
+        validate_name(path,
+                      index.name(),
+                      "Index names currently support 1-64 ASCII letters, digits, spaces, and underscores");
+        if (std::any_of(index_names.begin(), index_names.end(), [&](std::string_view previous) {
+                return equals_ascii_case_insensitive(previous, index.name());
+            })) {
+            unsupported_operation(path, "Index names must be unique without regard to ASCII letter case");
+        }
+        index_names.push_back(index.name());
+        if (index.primary_key()) {
+            if (has_primary_key) {
+                unsupported_operation(path, "A table can have only one primary key index");
+            }
+            has_primary_key = true;
+        }
+        if (index.columns().empty() || index.columns().size() > maximum_index_columns) {
+            unsupported_operation(path, "A Jet4 index must have between 1 and 10 columns");
+        }
+        std::set<std::string_view> indexed_names;
+        for (const auto& indexed : index.columns()) {
+            const auto column = std::find_if(table.columns().begin(), table.columns().end(),
+                                             [&](const ColumnBuilder& candidate) {
+                                                 return candidate.name() == indexed.name;
+                                             });
+            if (column == table.columns().end()) {
+                unsupported_operation(path, "An index references a column that the table does not declare");
+            }
+            if (!indexed_names.insert(indexed.name).second) {
+                unsupported_operation(path, "An index must not declare the same column twice");
+            }
+            if (column->type() == DataType::ole) {
+                unsupported_operation(path, "Jet4 cannot index OLE columns");
+            }
+            if (column->type() == DataType::text || column->type() == DataType::memo) {
+                const auto requested_order = column->text_sort_order().value_or(TextSortOrder{1033, 0});
+                const Jet4TextSortOrder stored_order{
+                    requested_order.lcid,
+                    static_cast<std::uint8_t>(requested_order.version),
+                };
+                if (!jet4_text_sort_order_supported(stored_order)) {
+                    unsupported_operation(path, "Unsupported collating sort order for TEXT or MEMO index");
+                }
+            }
+        }
     }
 }
 
@@ -513,32 +580,69 @@ std::vector<std::uint8_t> build_system_catalog_row(const std::filesystem::path& 
     return row;
 }
 
-std::vector<std::uint8_t> build_table_definition_page(const std::filesystem::path& path,
-                                                     std::uint32_t page_size,
-                                                     std::uint32_t usage_map_page_number,
-                                                     const TableBuilder& table) {
+std::vector<std::uint8_t> build_index_leaf_page(std::uint32_t page_size,
+                                                std::uint32_t definition_page_number) {
+    std::vector<std::uint8_t> page(page_size, 0);
+    page[0] = static_cast<std::uint8_t>(PageType::index_leaf);
+    page[1] = 0x01;
+    write_u16(page, 2, static_cast<std::uint16_t>(page_size - index_entry_data_offset));
+    write_u32(page, index_table_definition_offset, definition_page_number);
+    return page;
+}
+
+std::uint64_t table_definition_size(const std::filesystem::path& path, const TableBuilder& table) {
+    (void)path;
     std::uint64_t definition_size = table_definition_header_size +
+                                   table.indexes().size() * index_row_count_block_size +
                                    table.columns().size() * column_definition_size +
+                                   table.indexes().size() * (physical_index_block_size + logical_index_block_size) +
                                    table_definition_trailer_size;
     for (const auto& column : table.columns()) {
         definition_size += 2 + column.name().size() * 2;
+    }
+    for (const auto& index : table.indexes()) {
+        definition_size += 2 + index.name().size() * 2;
     }
     const auto long_value_column_count = static_cast<std::uint64_t>(std::count_if(
         table.columns().begin(), table.columns().end(), [](const ColumnBuilder& column) {
             return jet4_is_long_value_type(column.type());
         }));
-    definition_size += long_value_column_count * 10;
-    if (definition_size > page_size || definition_size > std::numeric_limits<std::uint32_t>::max()) {
-        unsupported_operation(path, "Table definitions larger than one Jet4 page are not yet supported");
+    return definition_size + long_value_column_count * 10;
+}
+
+// How many continuation pages a definition of `definition_size` bytes needs.
+std::uint64_t table_definition_continuation_count(std::uint32_t page_size,
+                                                  std::uint64_t definition_size) {
+    if (definition_size <= page_size) {
+        return 0;
+    }
+    const std::uint64_t capacity = page_size - 8;
+    return (definition_size - page_size + capacity - 1) / capacity;
+}
+
+// Builds the first definition page followed by its continuation pages. The first page's next
+// pointer is `first_continuation_page`, and each continuation points at the one after it.
+std::vector<std::vector<std::uint8_t>> build_table_definition_pages(
+    const std::filesystem::path& path,
+    std::uint32_t page_size,
+    std::uint32_t usage_map_page_number,
+    std::uint32_t first_continuation_page,
+    const std::vector<std::uint32_t>& index_root_pages,
+    const TableBuilder& table) {
+    const std::uint64_t index_count = table.indexes().size();
+    if (index_root_pages.size() != index_count) {
+        unsupported_operation(path, "Index root pages do not match the declared indexes");
+    }
+    const std::uint64_t definition_size = table_definition_size(path, table);
+    if (definition_size > std::numeric_limits<std::uint32_t>::max()) {
+        unsupported_operation(path, "Jet4 table definition exceeds the format's size field");
     }
 
-    std::vector<std::uint8_t> page(page_size, 0);
+    // The definition is built as one logical stream - the first page's header and body followed
+    // by every continuation payload - and packed into pages at the end.
+    std::vector<std::uint8_t> page(definition_size, 0);
     page[0] = static_cast<std::uint8_t>(PageType::table_definition);
     page[1] = 0x01;
-    const std::uint64_t free_space = definition_size + 8 <= page_size
-                                         ? page_size - definition_size - 8
-                                         : 0;
-    write_u16(page, 2, static_cast<std::uint16_t>(free_space));
     write_u32(page, 8, static_cast<std::uint32_t>(definition_size));
     write_u32(page, 12, table_definition_magic);
     write_u32(page, 16, 0);
@@ -552,14 +656,15 @@ std::vector<std::uint8_t> build_table_definition_page(const std::filesystem::pat
         }));
     write_u16(page, 43, variable_column_count);
     write_u16(page, 45, static_cast<std::uint16_t>(table.columns().size()));
-    write_u32(page, 47, 0);
-    write_u32(page, 51, 0);
+    write_u32(page, 47, static_cast<std::uint32_t>(index_count));
+    write_u32(page, 51, static_cast<std::uint32_t>(index_count));
     page[55] = 0;
     write_u24_le(page, 56, usage_map_page_number);
     page[59] = 1;
     write_u24_le(page, 60, usage_map_page_number);
 
-    std::uint64_t column_offset = table_definition_header_size;
+    // Index row-count blocks stay zero for a new table; column definitions follow them.
+    std::uint64_t column_offset = table_definition_header_size + index_count * index_row_count_block_size;
     std::uint64_t fixed_data_offset = 0;
     std::uint16_t variable_table_index = 0;
     std::uint16_t long_value_table_index = static_cast<std::uint16_t>(std::count_if(
@@ -593,6 +698,10 @@ std::vector<std::uint8_t> build_table_definition_page(const std::filesystem::pat
         page[column_offset + 11] = 0;
         page[column_offset + 12] = 0;
         write_u16(page, column_offset + 13, 0);
+        if (const auto& sort_order = column.text_sort_order()) {
+            write_u16(page, column_offset + 11, sort_order->lcid);
+            page[column_offset + 14] = static_cast<std::uint8_t>(sort_order->version);
+        }
         page[column_offset + 15] = boolean_column || storage != nullptr ? 0x03 : 0x02;
         page[column_offset + 16] = 0;
         write_u32(page, column_offset + 17, 0);
@@ -620,36 +729,138 @@ std::vector<std::uint8_t> build_table_definition_page(const std::filesystem::pat
         }
     }
 
-    std::uint8_t long_value_map_row = 2;
+    for (std::size_t index = 0; index < index_count; ++index) {
+        const auto& declaration = table.indexes()[index];
+        write_u32(page, column_offset, physical_index_magic);
+        for (std::uint16_t entry = 0; entry < maximum_index_columns; ++entry) {
+            const std::uint64_t entry_offset = column_offset + 4 + static_cast<std::uint64_t>(entry) * 3;
+            if (entry >= declaration.columns().size()) {
+                write_u16(page, entry_offset, unused_index_column);
+                continue;
+            }
+            const auto& indexed = declaration.columns()[entry];
+            const auto column = std::find_if(table.columns().begin(), table.columns().end(),
+                                             [&](const ColumnBuilder& candidate) {
+                                                 return candidate.name() == indexed.name;
+                                             });
+            write_u16(page, entry_offset,
+                      static_cast<std::uint16_t>(std::distance(table.columns().begin(), column)));
+            page[entry_offset + 2] = indexed.ascending ? ascending_index_column_flag : 0;
+        }
+        page[column_offset + 34] = static_cast<std::uint8_t>(2 + index);
+        write_u24_le(page, column_offset + 35, usage_map_page_number);
+        write_u32(page, column_offset + 38, index_root_pages[index]);
+        write_u32(page, column_offset + 42, 0);
+        page[column_offset + 46] = static_cast<std::uint8_t>((declaration.unique() ? 0x01 : 0) |
+                                                             (declaration.ignore_nulls() ? 0x02 : 0) |
+                                                             (declaration.required() ? 0x08 : 0));
+        page[column_offset + 47] = 0;
+        write_u32(page, column_offset + 48, 0);
+        column_offset += physical_index_block_size;
+    }
+
+    for (std::size_t index = 0; index < index_count; ++index) {
+        write_u32(page, column_offset, table_definition_magic);
+        write_u32(page, column_offset + 4, static_cast<std::uint32_t>(index));
+        write_u32(page, column_offset + 8, static_cast<std::uint32_t>(index));
+        page[column_offset + 12] = 0;
+        write_u32(page, column_offset + 13, 0xffffffffu);
+        write_u32(page, column_offset + 17, 0);
+        page[column_offset + 21] = 0;
+        page[column_offset + 22] = 0;
+        page[column_offset + 23] = table.indexes()[index].primary_key() ? primary_index_type : 0;
+        write_u32(page, column_offset + 24, 0);
+        column_offset += logical_index_block_size;
+    }
+
+    for (const auto& index : table.indexes()) {
+        const std::uint16_t encoded_name_size = static_cast<std::uint16_t>(index.name().size() * 2);
+        write_u16(page, column_offset, encoded_name_size);
+        column_offset += 2;
+        for (unsigned char character : index.name()) {
+            page[column_offset++] = character;
+            page[column_offset++] = 0;
+        }
+    }
+
+    std::uint16_t long_value_map_row = static_cast<std::uint16_t>(2 + index_count);
     for (std::size_t index = 0; index < table.columns().size(); ++index) {
         const auto& column = table.columns()[index];
         if (!jet4_is_long_value_type(column.type())) {
             continue;
         }
         write_u16(page, column_offset, static_cast<std::uint16_t>(index));
-        page[column_offset + 2] = long_value_map_row;
+        page[column_offset + 2] = static_cast<std::uint8_t>(long_value_map_row);
         write_u24_le(page, column_offset + 3, usage_map_page_number);
         page[column_offset + 6] = static_cast<std::uint8_t>(long_value_map_row + 1);
         write_u24_le(page, column_offset + 7, usage_map_page_number);
-        long_value_map_row = static_cast<std::uint8_t>(long_value_map_row + 2);
+        long_value_map_row = static_cast<std::uint16_t>(long_value_map_row + 2);
         column_offset += 10;
     }
     page[column_offset++] = 0xff;
     page[column_offset] = 0xff;
-    return page;
+
+    const std::uint64_t continuation_capacity = page_size - 8;
+    std::uint64_t continuation_count = 0;
+    if (page.size() > page_size) {
+        continuation_count =
+            (page.size() - page_size + continuation_capacity - 1) / continuation_capacity;
+    }
+
+    std::vector<std::vector<std::uint8_t>> pages;
+    pages.reserve(static_cast<std::size_t>(1 + continuation_count));
+    std::vector<std::uint8_t> first_page(page_size, 0);
+    // A definition shorter than a page only fills the head of the first page; the rest stays
+    // zeroed rather than reading past the stream.
+    std::copy(page.begin(),
+              page.begin() + static_cast<std::ptrdiff_t>(std::min<std::uint64_t>(page_size, page.size())),
+              first_page.begin());
+    write_u32(first_page, 4,
+              continuation_count == 0 ? 0u : static_cast<std::uint32_t>(first_continuation_page));
+    write_u16(first_page, 2,
+              static_cast<std::uint16_t>(page_size >= page.size() + 8 ? page_size - page.size() - 8 : 0));
+    pages.push_back(std::move(first_page));
+
+    for (std::uint64_t position = 0; position < continuation_count; ++position) {
+        const std::uint64_t begin = page_size + position * continuation_capacity;
+        const std::uint64_t end = std::min<std::uint64_t>(begin + continuation_capacity, page.size());
+        const std::uint64_t used = end - begin;
+        std::vector<std::uint8_t> continuation(page_size, 0);
+        continuation[0] = static_cast<std::uint8_t>(PageType::table_definition);
+        continuation[1] = 0x01;
+        const std::uint64_t free_space = continuation_capacity >= used + 8
+                                             ? continuation_capacity - used - 8
+                                             : 0;
+        write_u16(continuation, 2, static_cast<std::uint16_t>(free_space));
+        write_u32(continuation, 4,
+                  position + 1 < continuation_count
+                      ? static_cast<std::uint32_t>(first_continuation_page + position + 1)
+                      : 0u);
+        std::copy(page.begin() + static_cast<std::ptrdiff_t>(begin),
+                  page.begin() + static_cast<std::ptrdiff_t>(end), continuation.begin() + 8);
+        pages.push_back(std::move(continuation));
+    }
+    return pages;
 }
 
 std::vector<std::uint8_t> build_usage_map_page(const std::filesystem::path& path,
                                               std::uint32_t page_size,
+                                              const std::vector<std::uint32_t>& index_root_pages,
                                               const TableBuilder& table) {
     constexpr std::uint64_t usage_map_row_size = 69;
     const auto long_value_columns = static_cast<std::uint64_t>(std::count_if(
         table.columns().begin(), table.columns().end(), [](const ColumnBuilder& column) {
             return jet4_is_long_value_type(column.type());
         }));
-    const std::uint64_t usage_map_count = 2 + long_value_columns * 2;
+    if (index_root_pages.size() != table.indexes().size()) {
+        unsupported_operation(path, "Index root pages do not match the declared indexes");
+    }
+    const std::uint64_t usage_map_count = 2 + index_root_pages.size() + long_value_columns * 2;
     if (usage_map_count > 255) {
-        unsupported_operation(path, "Too many Memo/OLE columns for one Jet4 usage-map page");
+        unsupported_operation(path, "Too many indexes or Memo/OLE columns for one Jet4 usage-map page");
+    }
+    if (2 + index_root_pages.size() > 255) {
+        unsupported_operation(path, "Too many indexes for one Jet4 usage-map page");
     }
     const std::uint64_t directory_size = usage_map_count * 2;
     const std::uint64_t header_size = data_page_row_directory_offset;
@@ -669,6 +880,13 @@ std::vector<std::uint8_t> build_usage_map_page(const std::filesystem::path& path
         const std::uint16_t row_start = static_cast<std::uint16_t>(page_size - (row_number + 1) * usage_map_row_size);
         write_u16(page, data_page_row_directory_offset + row_number * 2, row_start);
         page[row_start] = row_number == 0 ? 0x01 : 0x00;
+    }
+    // Each user index owns its root leaf page through an inline map on this page.
+    for (std::size_t index = 0; index < index_root_pages.size(); ++index) {
+        const std::uint16_t row_start =
+            static_cast<std::uint16_t>(page_size - (2 + index + 1) * usage_map_row_size);
+        write_u32(page, row_start + 1, index_root_pages[index]);
+        page[row_start + 5] = 0x01;
     }
     return page;
 }
@@ -756,11 +974,15 @@ void create_jet4_table(const std::filesystem::path& path,
     }
 
     std::vector<std::pair<std::uint64_t, std::vector<std::uint8_t>>> page_updates;
-    std::vector<std::uint8_t> table_definition_page;
+    GlobalUsagePageUpdates global_updates;
+    std::vector<std::uint64_t> global_bitmap_pages;
+    std::vector<std::vector<std::uint8_t>> table_definition_pages;
     std::vector<std::uint8_t> usage_map_page;
+    std::vector<std::uint32_t> index_root_pages;
     std::uint64_t expected_page_count = 0;
     std::uint64_t table_definition_page_number = 0;
     std::uint64_t usage_map_page_number = 0;
+    std::uint64_t first_continuation_page_number = 0;
 
     {
         const PageFile file = PageFile::open(path);
@@ -768,11 +990,20 @@ void create_jet4_table(const std::filesystem::path& path,
             unsupported_operation(path, "Table schema creation requires a Jet4 4 KB page database");
         }
         expected_page_count = file.page_count();
-        if (expected_page_count + 2 > 0x1000000) {
+        const std::uint64_t continuation_count =
+            table_definition_continuation_count(static_cast<std::uint32_t>(file.format().page_size),
+                                                table_definition_size(path, table));
+        table_definition_page_number = expected_page_count;
+        first_continuation_page_number = expected_page_count + 1;
+        usage_map_page_number = first_continuation_page_number + continuation_count;
+        const std::uint64_t new_page_count = 2 + continuation_count + table.indexes().size();
+        if (expected_page_count + new_page_count > 0x1000000) {
             unsupported_operation(path, "Jet4 table creation exceeds the three-byte page-reference limit");
         }
-        table_definition_page_number = expected_page_count;
-        usage_map_page_number = expected_page_count + 1;
+        for (std::size_t index = 0; index < table.indexes().size(); ++index) {
+            index_root_pages.push_back(
+                static_cast<std::uint32_t>(usage_map_page_number + 1 + index));
+        }
 
         const TableDefinition system_definition = read_table_definition(file, 2);
         const auto objects = read_system_catalog_objects(file, system_definition);
@@ -849,15 +1080,24 @@ void create_jet4_table(const std::filesystem::path& path,
                                       catalog_row_number});
         page_updates.emplace_back(id_index.root_page_number, std::move(id_page));
 
-        table_definition_page = build_table_definition_page(path,
-                                                            file.format().page_size,
-                                                            static_cast<std::uint32_t>(usage_map_page_number),
-                                                            table);
-        usage_map_page = build_usage_map_page(path, file.format().page_size, table);
-        page_updates.emplace_back(1,
-                                  mark_global_pages_allocated(file,
-                                                              {table_definition_page_number,
-                                                               usage_map_page_number}));
+        table_definition_pages = build_table_definition_pages(path,
+                                                              static_cast<std::uint32_t>(file.format().page_size),
+                                                              static_cast<std::uint32_t>(usage_map_page_number),
+                                                              static_cast<std::uint32_t>(first_continuation_page_number),
+                                                              index_root_pages,
+                                                              table);
+        usage_map_page = build_usage_map_page(path,
+                                              file.format().page_size,
+                                              index_root_pages,
+                                              table);
+        std::vector<std::uint64_t> allocated_pages{table_definition_page_number,
+                                                   usage_map_page_number};
+        for (std::uint64_t page = first_continuation_page_number;
+             page < first_continuation_page_number + table_definition_pages.size() - 1; ++page) {
+            allocated_pages.push_back(page);
+        }
+        allocated_pages.insert(allocated_pages.end(), index_root_pages.begin(), index_root_pages.end());
+        global_bitmap_pages = mark_global_pages_allocated(file, global_updates, allocated_pages);
     }
 
     PageFileWriter writer = PageFileWriter::open(path);
@@ -866,11 +1106,33 @@ void create_jet4_table(const std::filesystem::path& path,
                             "Database page count changed while creating a table",
                             path);
     }
-    if (writer.append_page(table_definition_page) != table_definition_page_number ||
-        writer.append_page(usage_map_page) != usage_map_page_number) {
+    for (std::size_t position = 0; position < table_definition_pages.size(); ++position) {
+        const std::uint64_t expected = table_definition_page_number + position;
+        if (writer.append_page(table_definition_pages[position]) != expected) {
+            throw DatabaseError(DatabaseErrorCode::io_error,
+                                "Jet4 table definition pages were appended at unexpected page numbers",
+                                path);
+        }
+    }
+    if (writer.append_page(usage_map_page) != usage_map_page_number) {
         throw DatabaseError(DatabaseErrorCode::io_error,
                             "Jet4 table pages were appended at unexpected page numbers",
                             path);
+    }
+    for (const std::uint32_t root_page_number : index_root_pages) {
+        if (writer.append_page(build_index_leaf_page(
+                static_cast<std::uint32_t>(writer.format().page_size),
+                static_cast<std::uint32_t>(table_definition_page_number))) != root_page_number) {
+            throw DatabaseError(DatabaseErrorCode::io_error,
+                                "Jet4 index root pages were appended at unexpected page numbers",
+                                path);
+        }
+    }
+    append_usage_bitmap_pages(writer, global_updates, global_bitmap_pages);
+    for (const auto& update : global_updates) {
+        if (update.first < expected_page_count) {
+            writer.write_page(update.first, update.second);
+        }
     }
     for (const auto& update : page_updates) {
         writer.write_page(update.first, update.second);

@@ -21,6 +21,13 @@ struct EncodedTableRow {
     std::vector<EncodedColumnValue> columns;
 };
 
+EncodedTableRow decode_row_layout(const PageFile& file,
+                                 const std::string& table_name,
+                                 std::uint64_t page_number,
+                                 std::uint16_t row_number,
+                                 const std::vector<std::uint8_t>& bytes,
+                                 const TableDefinition& definition);
+
 class TableRowReader {
 public:
     TableRowReader(const PageFile& file,

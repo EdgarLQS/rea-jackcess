@@ -1,5 +1,6 @@
 add_library(rea_jackcess STATIC)
 add_library(rea_jackcess::core ALIAS rea_jackcess)
+target_link_libraries(rea_jackcess PUBLIC ZLIB::ZLIB)
 target_compile_features(rea_jackcess PUBLIC cxx_std_17)
 set_target_properties(rea_jackcess PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}"
@@ -57,8 +58,11 @@ function(rea_jackcess_add_package package)
 endfunction()
 
 rea_jackcess_add_package(api
+    api/complex_values.cpp
     api/database.cpp
     api/database_file.cpp
+    api/relationships.cpp
+    api/queries.cpp
     api/table.cpp
     api/version.cpp
 )
@@ -75,9 +79,11 @@ rea_jackcess_add_package(page
     page/page_file.cpp
     page/page_file_write_lock.cpp
     page/page_writer.cpp
+    page/write_journal.cpp
 )
 
 rea_jackcess_add_package(catalog
+    catalog/complex_column.cpp
     catalog/property_map.cpp
     catalog/row_reader.cpp
     catalog/system_catalog.cpp
@@ -87,19 +93,70 @@ rea_jackcess_add_package(catalog
 )
 
 rea_jackcess_add_package(value
+    value/attachment_value.cpp
     value/jet4_value.cpp
     value/text_codec.cpp
+    value/unicode_case.cpp
 )
+target_link_libraries(rea_jackcess_value_objects PRIVATE ZLIB::ZLIB)
+
+set(rea_jackcess_basic_weights "${rea_jackcess_template_dir}/index_codes_genleg.txt")
+set(rea_jackcess_extended_weights "${rea_jackcess_template_dir}/index_codes_ext_genleg.txt")
+set(rea_jackcess_general_basic_weights "${rea_jackcess_template_dir}/index_codes_gen.txt")
+set(rea_jackcess_general_extended_weights "${rea_jackcess_template_dir}/index_codes_ext_gen.txt")
+set(rea_jackcess_general97_basic_weights "${rea_jackcess_template_dir}/index_codes_gen_97.txt")
+set(rea_jackcess_general97_extended_mappings "${rea_jackcess_template_dir}/index_mappings_ext_gen_97.txt")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${rea_jackcess_basic_weights}" "${rea_jackcess_extended_weights}"
+    "${rea_jackcess_general_basic_weights}" "${rea_jackcess_general_extended_weights}"
+    "${rea_jackcess_general97_basic_weights}" "${rea_jackcess_general97_extended_mappings}")
+file(SHA256 "${rea_jackcess_basic_weights}" rea_jackcess_basic_weights_sha256)
+file(SHA256 "${rea_jackcess_extended_weights}" rea_jackcess_extended_weights_sha256)
+file(SHA256 "${rea_jackcess_general_basic_weights}" rea_jackcess_general_basic_weights_sha256)
+file(SHA256 "${rea_jackcess_general_extended_weights}" rea_jackcess_general_extended_weights_sha256)
+file(SHA256 "${rea_jackcess_general97_basic_weights}" rea_jackcess_general97_basic_weights_sha256)
+file(SHA256 "${rea_jackcess_general97_extended_mappings}" rea_jackcess_general97_extended_mappings_sha256)
+if(NOT rea_jackcess_basic_weights_sha256 STREQUAL "acc97846553560c0b2cdde822c990cea2a2bea733ca071e850e180b9ce3cd9ee" OR
+   NOT rea_jackcess_extended_weights_sha256 STREQUAL "d60378601aebc22f579b8c5dd35a4c0d3e77c371275372f25511d73fe3e92ae7" OR
+   NOT rea_jackcess_general_basic_weights_sha256 STREQUAL "a0554f81d328732d3d6fcac5d44476130efeaccb96bdc1eda30590dd71ecb8b5" OR
+   NOT rea_jackcess_general_extended_weights_sha256 STREQUAL "0f54f68c0592ba5066d505cb3b6782e64edb344da6a0a24959277dea9a478c28" OR
+   NOT rea_jackcess_general97_basic_weights_sha256 STREQUAL "ad74d251bd8cf441976446e50d84bc7366c28e0ba2c970ada1b52904d816bad9" OR
+   NOT rea_jackcess_general97_extended_mappings_sha256 STREQUAL "60cb99d942c69c778bc4f2162af54168b6b3d631db502bce5d4b3a318883935c")
+    message(FATAL_ERROR "A pinned Jackcess text-index weight table has an unexpected SHA-256")
+endif()
+file(READ "${rea_jackcess_basic_weights}" rea_jackcess_basic_weight_data)
+file(READ "${rea_jackcess_extended_weights}" rea_jackcess_extended_weight_data)
+file(READ "${rea_jackcess_general_basic_weights}" rea_jackcess_general_basic_weight_data)
+file(READ "${rea_jackcess_general_extended_weights}" rea_jackcess_general_extended_weight_data)
+file(READ "${rea_jackcess_general97_basic_weights}" rea_jackcess_general97_basic_weight_data)
+file(READ "${rea_jackcess_general97_extended_mappings}" rea_jackcess_general97_extended_mapping_data)
+file(WRITE "${PROJECT_BINARY_DIR}/generated/jet4_text_index_weights.inc"
+    "constexpr char basic_weights[] = R\"weights(${rea_jackcess_basic_weight_data})weights\";\n"
+    "constexpr char extended_weights[] = R\"weights(${rea_jackcess_extended_weight_data})weights\";\n"
+    "constexpr char general_basic_weights[] = R\"weights(${rea_jackcess_general_basic_weight_data})weights\";\n"
+    "constexpr char general_extended_weights[] = R\"weights(${rea_jackcess_general_extended_weight_data})weights\";\n"
+    "constexpr char general97_basic_weights[] = R\"weights(${rea_jackcess_general97_basic_weight_data})weights\";\n"
+    "constexpr char general97_mapping_data[] = R\"weights(${rea_jackcess_general97_extended_mapping_data})weights\";\n")
 
 rea_jackcess_add_package(index
     index/index_cursor.cpp
+    index/jet4_text_key.cpp
+)
+target_include_directories(rea_jackcess_index_objects PRIVATE "${PROJECT_BINARY_DIR}/generated")
+
+rea_jackcess_add_package(io
+    io/csv.cpp
 )
 
 rea_jackcess_add_package(write
     write/jet4_database_creator.cpp
     write/jet4_database_creator.hpp
     write/jet4_global_usage_map.cpp
+    write/jet4_index_entry.cpp
+    write/jet4_index_entry.hpp
     write/jet4_global_usage_map.hpp
+    write/jet4_relationship_creator.cpp
+    write/jet4_relationship_creator.hpp
     write/jet4_row_writer.cpp
     write/jet4_row_writer.hpp
     write/jet4_variable_type.hpp

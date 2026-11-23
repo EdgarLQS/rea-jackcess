@@ -2,6 +2,7 @@
 
 #include "property_map.hpp"
 #include "system_catalog.hpp"
+#include "../format/jet_format.hpp"
 
 #include <utility>
 
@@ -25,9 +26,9 @@ void add_error(TableSchemaCatalog& catalog,
 }
 
 TableSchemaCatalog read_table_schema_catalog(const PageFile& file) {
-    if (file.format().version != EngineVersion::jet4) {
+    if (!has_jet4_page_layout(file.format().version)) {
         throw DatabaseError(DatabaseErrorCode::unsupported_version,
-                            "Jet4 table schema enumeration requested for a different engine version",
+                            "Jet4/ACE table schema enumeration requested for an unsupported engine version",
                             file.path());
     }
 
@@ -57,6 +58,12 @@ TableSchemaCatalog read_table_schema_catalog(const PageFile& file) {
                 if (object.property_error) {
                     add_error(result, name, *object.property_error, object.property_error_page);
                 } else {
+                    definition.table_validation_rule = read_text_property(
+                        file, name, object.page_number, object.row_number,
+                        object.property_bytes.value_or(std::vector<std::uint8_t>{}), "ValidationRule");
+                    definition.table_validation_text = read_text_property(
+                        file, name, object.page_number, object.row_number,
+                        object.property_bytes.value_or(std::vector<std::uint8_t>{}), "ValidationText");
                     std::vector<std::string> column_names;
                     column_names.reserve(definition.columns.size());
                     for (const auto& column : definition.columns) {
@@ -70,8 +77,29 @@ TableSchemaCatalog read_table_schema_catalog(const PageFile& file) {
                             object.row_number,
                             column_names,
                             object.property_bytes.value_or(std::vector<std::uint8_t>{}));
+                        const auto calculated_result_types = read_calculated_column_result_types(
+                            file,
+                            name,
+                            object.page_number,
+                            object.row_number,
+                            column_names,
+                            object.property_bytes.value_or(std::vector<std::uint8_t>{}));
+                        const auto property = [&](std::string_view property_name) {
+                            return read_column_text_properties(file, name, object.page_number, object.row_number,
+                                                               column_names, object.property_bytes.value_or(
+                                                                   std::vector<std::uint8_t>{}), property_name);
+                        };
+                        auto defaults = property("DefaultValue");
+                        auto rules = property("ValidationRule");
+                        auto messages = property("ValidationText");
                         for (std::size_t index = 0; index < definition.columns.size(); ++index) {
                             definition.columns[index].nullable = nullable[index];
+                            if (definition.columns[index].calculated) {
+                                definition.columns[index].calculated_result_type = calculated_result_types[index];
+                            }
+                            definition.columns[index].default_expression = std::move(defaults[index]);
+                            definition.columns[index].validation_rule = std::move(rules[index]);
+                            definition.columns[index].validation_text = std::move(messages[index]);
                         }
                     } catch (const DatabaseError& error) {
                         add_error(result, name, error.what(), error.page_number());

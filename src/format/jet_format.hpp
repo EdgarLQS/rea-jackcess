@@ -14,6 +14,8 @@ constexpr std::size_t database_header_size = 21;
 
 FormatInfo detect_format(const std::array<std::uint8_t, database_header_size>& header,
                          const std::filesystem::path& path);
+// ACE versions retain the Jet4 page, table-definition, usage-map and row layouts for reads.
+bool has_jet4_page_layout(EngineVersion version) noexcept;
 std::optional<std::uint16_t> decode_jet4_code_page(const std::vector<std::uint8_t>& raw_root_page);
 
 }

@@ -4,7 +4,7 @@
 
 首期在原生 Linux x86_64 和 ARM64 上交付 C++ 核心库，完整对齐 Jackcess 5.2.0 的公开能力和可观察行为。采用 C++ 接口表达数据库、表、游标、类型化值、构建器和扩展点。Jet4 读写是第一个内部里程碑，核心库在全量行为矩阵通过后发布。
 
-当前已建立 C++17/CMake 构建、诊断 CLI、测试入口和公开读取接口。P1 的已实现部分包括 Jet/ACE 引擎头识别、只读页访问，以及 Jet4 表定义、Usage Map、数据页行目录、溢出行跟随、普通本地表 schema 发现、流式逐行读取、基础值/长值解码、列 `Required` 推导可空性、逻辑/物理索引定义读取和 B-tree 叶链顺序扫描。公开 `Database`、`Table`、`RowCursor`、`Row`、`RowId`、`Value` 可由核心库直接使用；`Database::create` 可从固定模板创建空 V2000/V2003 文件，`TableBuilder` 可在新 V2000 库中创建 BYTE、SHORT、LONG、SINGLE、DOUBLE、MONEY、GUID、TEXT、BINARY、MEMO、OLE 列空表，并通过 C++ 回读和固定 Jackcess 5.2.0 独立打开检查。显式读写打开及 `Table::add_row/add_rows` 已支持向 Jet4 V2000 无索引本地表追加 BYTE/SHORT/LONG/SINGLE/DOUBLE/MONEY/GUID/TEXT/BINARY/MEMO/OLE 行；MONEY 使用 `DecimalValue` 精确编码四位小数，并在写入前检查可表示精度和有符号 64 位范围。Memo/OLE 长值写入列级 Usage Map 所属的 LVAL 单页或多页链，Memo 可由 UTF-8 文本编码或从非空 `raw_bytes` 原样写入，OLE 使用 `BlobValue`。写入门禁读取 `MSysDb.AccessVersion`，仅接受 `08.50`；V2003 或未知版本拒绝。`Table::update_row` 可按 RowId 原位更新等长行、压实缩短行，或将增长后的行写入 overflow 数据行；Memo/OLE 更新会分配新 LVAL 页，逻辑 RowId 不变。`Table::delete_row` 可在无索引本地 Jet4 V2000 表中标记删除并更新行数。写入器维护数据页、表和全局内联 Usage Map 及行数；CTest 覆盖数值/GUID/TEXT/BINARY 与 MONEY 精度、指数形式、边界、拒绝行为和更新，以及 Memo/OLE 多页追加、更新、Unicode、空值、NULL 与重开读取。固定 Jackcess 5.2.0 已独立重开并核对 MONEY 精度、正负边界和更新结果，以及 20,000 字符 Memo 与 8,192 字节 OLE、更新后的内容、Unicode、空值和 NULL；Java 写入 MONEY 后 C++ canonical 也已核对精确值。当前表名、列名限 ASCII 字母、数字、空格和下划线；用户索引创建/维护、索引表行迁移、旧长值页回收、Usage Map 扩展、V2003 表写入和索引表删除尚未实现。`Row::id()` 提供页号和行号，`Table::indexes()` 提供逻辑索引元数据，`Table::rows_by_index()` 提供索引顺序扫描。`inspect` 输出内部诊断摘要；`canonical` 支持 Jet4 canonical JSON v1，输出 schema、列可空性、逻辑/物理索引定义、已支持类型的行值和行集哈希。其他列/表属性、索引键语义解码、按键查找/范围游标、P0 矩阵和关键难点核验仍待完成；上游同步 CI 待实施。以上是部分实现状态，不代表 P1/P2 验收完成。
+当前进度（详见[交接说明](05-交接说明.md)）：Jet4（V2000/V2003）读写主链路已贯通——目录解析与格式分类、`Database::create` 建库、`TableBuilder` 建表与 `Table::add_index()` 给既有表加索引、行插入/批量/更新/删除（含行迁移、Memo/OLE 长值页、列默认值与基本校验）、索引查询、外键写入前检查与级联执行（级联更新/删除/置空，可向孙表递归）、关系读取与创建、库/表属性块读写、链接表目录行与解析式打开、保存查询读取与九类 SQL 重建、表级 CSV 导出导入（文本与固定 `ExportUtil` 逐字节一致）。页写批次使用写前日志恢复进程中断，并在同一操作内记录覆盖页以支持回滚。截至 2026-11-23，加入 ACE 类型化复杂值与 wrapper 回归后普通构建的 CTest 29 项全部通过；外键/级联/关系创建/查询另有固定 Jackcess 5.2.0 交叉复核。当前边界：ACE 写入未实现；ACE V2007/V2010 固定样本的普通表 schema/行可只读，复杂列 ID 与概念表/类型表/flat table 及外键列名已读取，已支持固定样本中的类型化复杂值只读和附件 wrapper 解码；V2016/V2019 表读取未验证；表/索引删除和节点页合并仍未实现；Jet4 TEXT 索引已支持 General Legacy（1033/0）、General（1033/1）、General 97（1033/-1），以及固定 5.2.0 对 LCID 1049/1055/1058 version 0 回退到 General Legacy 的编码；固定版 Jackcess 的 1049/1055/1058 描述符也委托 General Legacy，其他 LCID 默认将索引标为只读；C++ 覆盖全部六种基线描述符。MEMO 列索引已沿用可用文本排序编码支持创建、回填、维护、查询和升降序扫描，并实现 Jackcess 5.2.0 的 255 个 UTF-16 单元与 510 字节完整键截断；可选 `writeBrokenIndex` 写入策略仍未实现。查询执行与表达式引擎、日期/复杂列的 CSV 交换按计划后置。以上仍属部分实现，不代表 P1/P2 验收完成。
 
 本机只读样本 `test_data_only_read/test_mdb.mdb`（SHA-256 `0bc0acb9c732de1e17c43c2d0a6019f7b5a62ccf83c5818a1bc42db7dbc460c6`）经 MDBTools 1.0.1 导出对照，系统目录 51 行的 `Id`、`ParentId`、`Name`、`Type`、`Flags` 均匹配。样本不纳入仓库测试资产；可重复的合成格式用例纳入 CTest。
 
@@ -36,6 +36,9 @@ PGeo 导入和样本克隆各自发布。由产品图层新建 PGeo 另行规划
 - [验收与发布门槛](02-验收与发布门槛.md)
 - [Jackcess 5.2.0 能力矩阵（P0 初版，未冻结）](03-Jackcess-5.2.0能力矩阵.md)
 - [P0 本机基线核验记录（部分完成）](04-P0基线核验记录.md)
+- [交接说明：当前进度、边界与下一步](05-交接说明.md)
+- [待办清单：按优先级拆分的事项](06-待办清单.md)
+- [ACE 只读读取与复杂列实施计划](07-ACE读取与复杂列实施计划.md)
 
 `MDB_REFERENCE_DIR` 指向 `daydaydaywork/dailyWork/schemedesign/20261116_MDB 读写问题设计` 的本地目录。下列路径相对于该目录，P0 在验收清单记录所用资料和脚本的版本或哈希。
 

@@ -17,6 +17,9 @@ inline constexpr std::uint8_t jet4_long_type_code = 0x04;
 inline constexpr std::uint8_t jet4_money_type_code = 0x05;
 inline constexpr std::uint8_t jet4_float_type_code = 0x06;
 inline constexpr std::uint8_t jet4_double_type_code = 0x07;
+// Jet4 stores SHORT_DATE_TIME as an Access date serial: an 8-byte double whose integer part is
+// days since 1899-12-30. V2007+ adds EXT_DATE_TIME (0x14), which the fixed Jar rejects for Jet4.
+inline constexpr std::uint8_t jet4_date_type_code = 0x08;
 inline constexpr std::uint8_t jet4_guid_type_code = 0x0f;
 
 struct Jet4FixedType {
@@ -25,13 +28,14 @@ struct Jet4FixedType {
     std::uint16_t byte_size;
 };
 
-inline constexpr std::array<Jet4FixedType, 7> jet4_fixed_types{{
+inline constexpr std::array<Jet4FixedType, 8> jet4_fixed_types{{
     {DataType::byte, jet4_byte_type_code, 1},
     {DataType::int16, jet4_short_type_code, 2},
     {DataType::int32, jet4_long_type_code, 4},
     {DataType::money, jet4_money_type_code, 8},
     {DataType::float32, jet4_float_type_code, 4},
     {DataType::float64, jet4_double_type_code, 8},
+    {DataType::short_date_time, jet4_date_type_code, 8},
     {DataType::guid, jet4_guid_type_code, 16},
 }};
 

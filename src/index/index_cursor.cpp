@@ -1,5 +1,6 @@
 #include "index_cursor.hpp"
 
+#include "../format/jet_format.hpp"
 #include "../page/page_types.hpp"
 
 #include <algorithm>
@@ -75,6 +76,10 @@ std::uint32_t read_u32_be(const std::vector<std::uint8_t>& bytes, std::uint64_t 
            (static_cast<std::uint32_t>(bytes[offset + 1]) << 16) |
            (static_cast<std::uint32_t>(bytes[offset + 2]) << 8) |
            static_cast<std::uint32_t>(bytes[offset + 3]);
+}
+
+bool key_before(const std::vector<std::uint8_t>& left, const std::vector<std::uint8_t>& right) {
+    return std::lexicographical_compare(left.begin(), left.end(), right.begin(), right.end());
 }
 
 int compare_entries(const IndexPageEntry& left, const IndexPageEntry& right) {
@@ -207,8 +212,15 @@ IndexPage read_index_page(const PageFile& file,
                 }
                 entry.child_page_number = child_page_number;
             }
-            if (!entries.empty() && compare_entries(entries.back(), entry) >= 0) {
-                invalid_index_page(file, table_name, page_number, "Index entries are not in ascending order");
+            // Leaf entries are unique (key, row) pairs and must strictly increase. Node entries
+            // carry the greatest key of each child subtree, so sibling maxima may repeat when a
+            // duplicate key spans a page boundary.
+            if (!entries.empty()) {
+                const int order = compare_entries(entries.back(), entry);
+                if (leaf ? order >= 0 : order > 0) {
+                    invalid_index_page(file, table_name, page_number,
+                                       "Index entries are not in ascending order");
+                }
             }
 
             entries.push_back(std::move(entry));
@@ -242,15 +254,21 @@ struct IndexEntryCursor::Impl {
     Impl(const PageFile& source_file,
          std::string source_table_name,
          std::uint64_t source_table_definition_page_number,
-         std::uint32_t root_page_number)
+         std::uint32_t root_page_number,
+         std::optional<std::vector<std::uint8_t>> source_start_key,
+         std::optional<std::vector<std::uint8_t>> source_stop_key,
+         bool source_reverse)
         : file(source_file),
           table_name(std::move(source_table_name)),
-          table_definition_page_number(source_table_definition_page_number) {
-        if (file.format().version != EngineVersion::jet4) {
+          table_definition_page_number(source_table_definition_page_number),
+          start_key(std::move(source_start_key)),
+          stop_key(std::move(source_stop_key)),
+          reverse(source_reverse) {
+        if (!has_jet4_page_layout(file.format().version)) {
             DatabaseErrorContext context;
             context.table_name = table_name;
             throw DatabaseError(DatabaseErrorCode::unsupported_version,
-                                "Jet4 index traversal requested for a different engine version",
+                                "Jet4/ACE index traversal requested for an unsupported engine version",
                                 file.path(),
                                 std::nullopt,
                                 std::move(context));
@@ -259,7 +277,23 @@ struct IndexEntryCursor::Impl {
             exhausted = true;
             return;
         }
+        if (reverse) {
+            // Callers pass the same [start, stop) interval as for forward scans; the reverse
+            // cursor seeks from the upper bound and stops at the lower bound.
+            if (stop_key) {
+                seek(*stop_key, root_page_number);
+            } else {
+                descend_rightmost(root_page_number);
+            }
+        } else if (start_key) {
+            seek(*start_key, root_page_number);
+        } else {
+            descend_leftmost(root_page_number);
+        }
+    }
 
+    // Walks to the leftmost leaf and starts at its first entry.
+    void descend_leftmost(std::uint32_t root_page_number) {
         std::uint32_t page_number = root_page_number;
         std::optional<std::uint8_t> parent_level;
         while (true) {
@@ -295,7 +329,161 @@ struct IndexEntryCursor::Impl {
         }
     }
 
-    std::optional<IndexRowLocation> next() {
+    // Walks to the rightmost leaf and starts just past its last entry for reverse scans.
+    void descend_rightmost(std::uint32_t root_page_number) {
+        std::uint32_t page_number = root_page_number;
+        std::optional<std::uint8_t> parent_level;
+        while (true) {
+            if (!visited_pages.insert(page_number).second) {
+                invalid_index_page(file, table_name, page_number, "Index tree contains a child-page cycle");
+            }
+            IndexPage page = read_index_page(file,
+                                             table_name,
+                                             table_definition_page_number,
+                                             page_number);
+            if (parent_level && page.level + 1 != *parent_level) {
+                invalid_index_page(file, table_name, page_number,
+                                   "Index child page has an unexpected tree level");
+            }
+            if (page.leaf) {
+                if (page.next_page_number != 0) {
+                    invalid_index_page(file, table_name, page_number,
+                                       "Rightmost index leaf has a next-page reference");
+                }
+                next_entry_index = page.entries.size();
+                current_leaf = std::move(page);
+                return;
+            }
+            std::uint32_t last_child = 0;
+            if (!page.entries.empty()) {
+                last_child = *page.entries.back().child_page_number;
+            }
+            if (page.child_tail_page_number != 0) {
+                last_child = page.child_tail_page_number;
+            }
+            if (last_child == 0) {
+                invalid_index_page(file, table_name, page_number,
+                                   "Index node has no rightmost child page");
+            }
+            parent_level = page.level;
+            page_number = last_child;
+        }
+    }
+
+    // Descends by key: node entries carry the greatest key of each child subtree, so the target
+    // belongs to the first child whose greatest key is not smaller than the search key. A key
+    // beyond the last entry belongs to the child tail when the node keeps one.
+    void seek(const std::vector<std::uint8_t>& key, std::uint32_t root_page_number) {
+        std::uint32_t page_number = root_page_number;
+        std::optional<std::uint8_t> parent_level;
+        while (true) {
+            if (!visited_pages.insert(page_number).second) {
+                invalid_index_page(file, table_name, page_number, "Index tree contains a child-page cycle");
+            }
+            IndexPage page = read_index_page(file,
+                                             table_name,
+                                             table_definition_page_number,
+                                             page_number);
+            if (parent_level && page.level + 1 != *parent_level) {
+                invalid_index_page(file, table_name, page_number,
+                                   "Index child page has an unexpected tree level");
+            }
+            if (page.leaf) {
+                std::size_t position = 0;
+                // Both directions position at the first key >= the seek key. Forward scans return
+                // that entry first; reverse scans step back to the greatest key strictly below it.
+                while (position < page.entries.size() &&
+                       key_before(page.entries[position].key_bytes, key)) {
+                    ++position;
+                }
+                if (position > 0) {
+                    last_entry = page.entries[position - 1];
+                }
+                next_entry_index = position;
+                current_leaf = std::move(page);
+                return;
+            }
+
+            const IndexPageEntry* chosen = nullptr;
+            for (const auto& entry : page.entries) {
+                if (!key_before(entry.key_bytes, key)) {
+                    chosen = &entry;
+                    break;
+                }
+            }
+            std::uint32_t child_page_number = 0;
+            if (chosen != nullptr) {
+                child_page_number = *chosen->child_page_number;
+            } else if (page.child_tail_page_number != 0) {
+                child_page_number = page.child_tail_page_number;
+            } else if (!page.entries.empty()) {
+                child_page_number = *page.entries.back().child_page_number;
+            }
+            if (child_page_number == 0) {
+                invalid_index_page(file, table_name, page_number,
+                                   "Index node has no child page for the search key");
+            }
+            parent_level = page.level;
+            page_number = child_page_number;
+        }
+    }
+
+    std::optional<IndexEntryRecord> next_entry() {
+        return reverse ? prev_entry() : forward_entry();
+    }
+
+    std::optional<IndexEntryRecord> prev_entry() {
+        if (exhausted || !current_leaf) {
+            return std::nullopt;
+        }
+
+        while (next_entry_index == 0) {
+            const std::uint32_t previous_page_number = current_leaf->previous_page_number;
+            if (previous_page_number == 0) {
+                exhausted = true;
+                return std::nullopt;
+            }
+            if (!visited_pages.insert(previous_page_number).second) {
+                invalid_index_page(file, table_name, previous_page_number,
+                                   "Index leaf chain contains a page cycle");
+            }
+            const std::uint32_t current_page_number = current_leaf->page_number;
+            const std::optional<IndexPageEntry> first_entry =
+                current_leaf->entries.empty()
+                    ? last_entry
+                    : std::optional<IndexPageEntry>(current_leaf->entries.front());
+            IndexPage previous_page = read_index_page(file,
+                                                      table_name,
+                                                      table_definition_page_number,
+                                                      previous_page_number);
+            if (!previous_page.leaf || previous_page.level != current_leaf->level) {
+                invalid_index_page(file, table_name, previous_page_number,
+                                   "Index leaf chain references a page at a different level");
+            }
+            if (previous_page.next_page_number != current_page_number) {
+                invalid_index_page(file, table_name, previous_page_number,
+                                   "Index leaf sibling references are inconsistent");
+            }
+            if (first_entry && !previous_page.entries.empty() &&
+                compare_entries(previous_page.entries.back(), *first_entry) >= 0) {
+                invalid_index_page(file, table_name, previous_page_number,
+                                   "Index entries are out of order across leaf pages");
+            }
+            last_entry = first_entry;
+            current_leaf = std::move(previous_page);
+            next_entry_index = current_leaf->entries.size();
+        }
+
+        const IndexPageEntry& entry = current_leaf->entries[--next_entry_index];
+        if (start_key && key_before(entry.key_bytes, *start_key)) {
+            exhausted = true;
+            return std::nullopt;
+        }
+        last_entry = entry;
+        return IndexEntryRecord{entry.row, entry.key_bytes};
+    }
+
+    std::optional<IndexEntryRecord> forward_entry() {
         if (exhausted || !current_leaf) {
             return std::nullopt;
         }
@@ -336,7 +524,19 @@ struct IndexEntryCursor::Impl {
 
         const IndexPageEntry& entry = current_leaf->entries[next_entry_index++];
         last_entry = entry;
-        return entry.row;
+        if (stop_key && !key_before(entry.key_bytes, *stop_key)) {
+            exhausted = true;
+            return std::nullopt;
+        }
+        return IndexEntryRecord{entry.row, entry.key_bytes};
+    }
+
+    std::optional<IndexRowLocation> next() {
+        const auto entry = next_entry();
+        if (!entry) {
+            return std::nullopt;
+        }
+        return entry->row;
     }
 
     const PageFile& file;
@@ -347,16 +547,25 @@ struct IndexEntryCursor::Impl {
     std::optional<IndexPageEntry> last_entry;
     std::size_t next_entry_index = 0;
     bool exhausted = false;
+    std::optional<std::vector<std::uint8_t>> start_key;
+    std::optional<std::vector<std::uint8_t>> stop_key;
+    bool reverse = false;
 };
 
 IndexEntryCursor::IndexEntryCursor(const PageFile& file,
                                    std::string table_name,
                                    std::uint64_t table_definition_page_number,
-                                   std::uint32_t root_page_number)
+                                   std::uint32_t root_page_number,
+                                   std::optional<std::vector<std::uint8_t>> start_key,
+                                   std::optional<std::vector<std::uint8_t>> stop_key,
+                                   bool reverse)
     : impl_(std::make_unique<Impl>(file,
                                    std::move(table_name),
                                    table_definition_page_number,
-                                   root_page_number)) {}
+                                   root_page_number,
+                                   std::move(start_key),
+                                   std::move(stop_key),
+                                   reverse)) {}
 
 IndexEntryCursor::~IndexEntryCursor() = default;
 
@@ -369,6 +578,13 @@ std::optional<IndexRowLocation> IndexEntryCursor::next() {
         return std::nullopt;
     }
     return impl_->next();
+}
+
+std::optional<IndexEntryRecord> IndexEntryCursor::next_entry() {
+    if (!impl_) {
+        return std::nullopt;
+    }
+    return impl_->next_entry();
 }
 
 }

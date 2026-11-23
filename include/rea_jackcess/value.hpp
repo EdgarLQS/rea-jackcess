@@ -38,6 +38,8 @@ struct BlobValue {
 
 struct UnsupportedValue {
     std::string description;
+    // Encoded column bytes are retained when the decoder does not understand the field type.
+    std::vector<std::uint8_t> raw_bytes;
 };
 
 // Jet4 TEXT values use UTF-8 std::string values; BINARY values use BlobValue.

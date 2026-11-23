@@ -1,3 +1,4 @@
+#include "rea_jackcess/csv.hpp"
 #include "rea_jackcess/database.hpp"
 #include "rea_jackcess/database_file.hpp"
 #include "rea_jackcess/version.hpp"
@@ -74,7 +75,9 @@ int main(int argc, char* argv[]) {
     const std::string_view option = argc >= 2 ? argv[1] : "";
     if (argc == 1 || option == "--help") {
         std::cout << "Usage: rea-jackcess [--help | --version | create <database-file> <v2000|v2003> | "
-                     "inspect <database-file> | canonical <database-file>]\n";
+                     "inspect <database-file> | canonical <database-file> | "
+                     "export <database-file> <table> <csv-file> [--header] | "
+                     "import <database-file> <table> <csv-file> [--header]\n";
         return 0;
     }
     if (option == "--version") {
@@ -196,6 +199,51 @@ int main(int argc, char* argv[]) {
                     std::cerr << " (" << *context.column_name << ')';
                 }
                 std::cerr << ']';
+            }
+            std::cerr << '\n';
+            return 1;
+        }
+    }
+
+    if ((argc == 6 || argc == 7) && (option == "export" || option == "import")) {
+        rea_jackcess::CsvOptions options;
+        if (argc == 7) {
+            if (std::string_view(argv[6]) != "--header") {
+                std::cerr << "Unknown export/import option: " << argv[6] << '\n';
+                return 2;
+            }
+            options.header = true;
+        }
+        try {
+            const auto mode = option == "import" ? rea_jackcess::DatabaseOpenMode::read_write
+                                                 : rea_jackcess::DatabaseOpenMode::read_only;
+            auto database = rea_jackcess::Database::open(argv[2], mode);
+            std::optional<rea_jackcess::Table> table;
+            for (const auto& candidate : database.tables()) {
+                if (candidate.name() == argv[3] && !candidate.is_linked()) {
+                    table = candidate;
+                    break;
+                }
+            }
+            if (!table) {
+                std::cerr << "Table is unavailable or not a local table: " << argv[3] << '\n';
+                return 2;
+            }
+            if (option == "export") {
+                rea_jackcess::export_table_csv(*table, argv[4], options);
+                std::cout << "Exported " << table->name() << " to " << argv[4] << '\n';
+            } else {
+                const auto rows = rea_jackcess::import_table_csv(*table, argv[4], options);
+                std::cout << "Imported " << rows << " rows into " << table->name() << '\n';
+            }
+            return 0;
+        } catch (const std::invalid_argument& error) {
+            std::cerr << "Cannot convert the CSV data: " << error.what() << '\n';
+            return 1;
+        } catch (const rea_jackcess::DatabaseError& error) {
+            std::cerr << "CSV " << option << " failed: " << error.what();
+            if (!error.path().empty()) {
+                std::cerr << " [file: " << error.path().string() << ']';
             }
             std::cerr << '\n';
             return 1;

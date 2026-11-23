@@ -51,6 +51,21 @@ bool is_msisam(const std::array<std::uint8_t, database_header_size>& header) {
 
 }
 
+bool has_jet4_page_layout(EngineVersion version) noexcept {
+    switch (version) {
+        case EngineVersion::jet4:
+        case EngineVersion::ace2007:
+        case EngineVersion::ace2010:
+        case EngineVersion::ace2016:
+        case EngineVersion::ace2019:
+            return true;
+        case EngineVersion::jet3:
+        case EngineVersion::msisam:
+            return false;
+    }
+    return false;
+}
+
 FormatInfo detect_format(const std::array<std::uint8_t, database_header_size>& header,
                          const std::filesystem::path& path) {
     const std::uint8_t version = header[version_offset];

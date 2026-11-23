@@ -21,16 +21,63 @@ constexpr std::uint64_t header_size = database_header_size;
 
 }
 
+PageWriteUndo::PageWriteUndo(std::filesystem::path path, std::uint64_t page_count,
+                             std::uint32_t page_size)
+    : path_(std::move(path)), original_page_count_(page_count), page_size_(page_size) {}
+
+bool PageWriteUndo::dirty() const noexcept {
+    return appended_ || !originals_.empty();
+}
+
+void PageWriteUndo::rollback() {
+    if (!dirty()) {
+        return;
+    }
+    if (!originals_.empty()) {
+        std::fstream restore(path_, std::ios::binary | std::ios::in | std::ios::out);
+        for (const auto& [page, bytes] : originals_) {
+            restore.seekp(static_cast<std::streamoff>(page * page_size_));
+            restore.write(reinterpret_cast<const char*>(bytes.data()),
+                          static_cast<std::streamsize>(bytes.size()));
+            if (!restore) {
+                throw DatabaseError(DatabaseErrorCode::io_error, "Cannot restore original database page",
+                                    path_, page);
+            }
+        }
+        restore.close();
+        if (!restore) {
+            throw DatabaseError(DatabaseErrorCode::io_error, "Cannot flush restored database pages", path_);
+        }
+    }
+    if (appended_) {
+        std::error_code error;
+        std::filesystem::resize_file(path_, original_page_count_ * page_size_, error);
+        if (error) {
+            throw DatabaseError(DatabaseErrorCode::io_error,
+                                "Cannot remove appended database pages: " + error.message(), path_);
+        }
+    }
+    originals_.clear();
+    appended_ = false;
+    if (journal_) {
+        // The in-process rollback already restored the pages, so the replay record goes too.
+        journal_->commit();
+        journal_.reset();
+    }
+}
+
 PageFileWriter::PageFileWriter(std::filesystem::path path,
                                std::fstream stream,
                                FormatInfo format,
-                               std::uint64_t page_count)
+                               std::uint64_t page_count,
+                               PageWriteUndo* undo)
     : path_(std::move(path)),
       stream_(std::move(stream)),
       format_(format),
-      page_count_(page_count) {}
+      page_count_(page_count),
+      undo_(undo) {}
 
-PageFileWriter PageFileWriter::open(const std::filesystem::path& path) {
+PageFileWriter PageFileWriter::open(const std::filesystem::path& path, PageWriteUndo* undo) {
     std::error_code filesystem_error;
     const std::uint64_t file_size = std::filesystem::file_size(path, filesystem_error);
     if (filesystem_error) {
@@ -65,7 +112,12 @@ PageFileWriter PageFileWriter::open(const std::filesystem::path& path) {
                             path);
     }
 
-    return PageFileWriter(path, std::move(stream), format, file_size / format.page_size);
+    const auto page_count = file_size / format.page_size;
+    if (undo && (undo->path_ != path || undo->page_size_ != format.page_size ||
+                 undo->original_page_count_ > page_count)) {
+        throw std::invalid_argument("Page undo does not match the database");
+    }
+    return PageFileWriter(path, std::move(stream), format, page_count, undo);
 }
 
 const std::filesystem::path& PageFileWriter::path() const noexcept {
@@ -102,6 +154,28 @@ void PageFileWriter::write_page(std::uint64_t page_number, const std::vector<std
                             page_number);
     }
 
+    if (undo_ && page_number < undo_->original_page_count_ &&
+        undo_->originals_.count(page_number) == 0) {
+        std::vector<std::uint8_t> original(format_.page_size);
+        stream_.clear();
+        stream_.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+        stream_.read(reinterpret_cast<char*>(original.data()),
+                     static_cast<std::streamsize>(original.size()));
+        if (!stream_) {
+            fail_io("Cannot read original database page before writing", page_number);
+        }
+        const auto [position, inserted] = undo_->originals_.emplace(page_number, std::move(original));
+        if (inserted) {
+            // Journal the pre-image before the page is overwritten so a crash mid-batch can be
+            // replayed by the next open. Only the first image of a page is kept.
+            if (!undo_->journal_) {
+                undo_->journal_ = std::make_unique<WriteJournal>(path_, undo_->original_page_count_,
+                                                                 format_.page_size);
+            }
+            undo_->journal_->record_page(page_number, position->second);
+        }
+    }
+
     stream_.clear();
     stream_.seekp(static_cast<std::streamoff>(offset), std::ios::beg);
     if (!stream_) {
@@ -134,6 +208,14 @@ std::uint64_t PageFileWriter::append_page(const std::vector<std::uint8_t>& page)
     if (!stream_) {
         fail_io("Cannot seek to database end for appending", page_number);
     }
+    if (undo_) {
+        if (!undo_->journal_) {
+            undo_->journal_ = std::make_unique<WriteJournal>(path_, undo_->original_page_count_,
+                                                             format_.page_size);
+        }
+        undo_->journal_->record_append();
+        undo_->appended_ = true;
+    }
     stream_.write(reinterpret_cast<const char*>(page.data()), static_cast<std::streamsize>(page.size()));
     if (!stream_) {
         fail_io("Cannot append database page", page_number);
@@ -148,6 +230,11 @@ void PageFileWriter::flush() {
     stream_.flush();
     if (!stream_) {
         fail_io("Cannot flush database writes", page_count_ == 0 ? 0 : page_count_ - 1);
+    }
+    if (undo_ && undo_->journal_) {
+        // The batch reached the database, so replaying it is no longer needed.
+        undo_->journal_->commit();
+        undo_->journal_.reset();
     }
 }
 

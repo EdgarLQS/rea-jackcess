@@ -10,6 +10,11 @@
 
 namespace rea_jackcess::detail {
 
+struct Jet4TextSortOrder {
+    std::uint16_t lcid;
+    std::uint8_t version;
+};
+
 struct ColumnDefinition {
     std::string name;
     std::uint8_t type;
@@ -25,6 +30,14 @@ struct ColumnDefinition {
     std::optional<bool> nullable;
     std::optional<UsageMapReference> long_value_owned_pages;
     std::optional<UsageMapReference> long_value_free_space_pages;
+    std::optional<Jet4TextSortOrder> text_sort_order;
+    std::optional<std::string> default_expression;
+    std::optional<std::string> validation_rule;
+    std::optional<std::string> validation_text;
+    std::optional<std::uint32_t> complex_type_id;
+    bool calculated = false;
+    bool complex_value_foreign_key = false;
+    std::optional<std::uint8_t> calculated_result_type;
 };
 
 struct IndexColumnDefinition {
@@ -68,6 +81,8 @@ struct TableDefinition {
     std::vector<ColumnDefinition> columns;
     std::vector<PhysicalIndexDefinition> physical_indexes;
     std::vector<LogicalIndexDefinition> indexes;
+    std::optional<std::string> table_validation_rule;
+    std::optional<std::string> table_validation_text;
     bool column_properties_available = false;
 };
 

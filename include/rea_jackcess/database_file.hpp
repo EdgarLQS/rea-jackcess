@@ -20,6 +20,18 @@ enum class EngineVersion {
     msisam,
 };
 
+enum class FileFormat {
+    v1997,
+    generic_jet4,
+    v2000,
+    v2003,
+    v2007,
+    v2010,
+    v2016,
+    v2019,
+    msisam,
+};
+
 enum class DatabaseFormat {
     v2000,
     v2003,
@@ -32,6 +44,9 @@ enum class DatabaseErrorCode {
     corrupted_file,
     page_out_of_range,
     unsupported_operation,
+    // A requested write would break a constraint the file already declares, so the
+    // operation is rejected without changing any page.
+    constraint_violation,
 };
 
 struct DatabaseErrorContext {
@@ -84,6 +99,8 @@ public:
 
     const std::filesystem::path& path() const noexcept;
     const FormatInfo& format() const noexcept;
+    // For Jet4, inspects the database AccessVersion property in addition to the header.
+    FileFormat file_format() const;
     std::uint64_t page_count() const noexcept;
 
     // Returns stored page bytes. Page zero is not unmasked and encoded pages are not decoded.

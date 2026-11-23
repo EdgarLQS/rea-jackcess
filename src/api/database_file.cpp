@@ -1,5 +1,6 @@
 #include "rea_jackcess/database_file.hpp"
 
+#include "catalog/system_catalog.hpp"
 #include "page/page_file.hpp"
 
 #include <utility>
@@ -57,6 +58,10 @@ const std::filesystem::path& DatabaseFile::path() const noexcept {
 
 const FormatInfo& DatabaseFile::format() const noexcept {
     return impl_->page_file.format();
+}
+
+FileFormat DatabaseFile::file_format() const {
+    return detail::identify_file_format(impl_->page_file);
 }
 
 std::uint64_t DatabaseFile::page_count() const noexcept {
