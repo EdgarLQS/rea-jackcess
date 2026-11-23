@@ -89,5 +89,7 @@ C++ 以目录划分内部模块：公开接口使用 `rea_jackcess` 命名空间
 - [重写计划](plan/Jackcess-C++重写/README.md)列出范围、固定版本、JAR 哈希和外部资料位置。
 - [实施工作包](plan/Jackcess-C++重写/01-实施工作包.md)列出开发顺序、依赖和上游同步流程。
 - [验收与发布门槛](plan/Jackcess-C++重写/02-验收与发布门槛.md)列出格式矩阵、双向回读、故障测试和发布条件。
-- [Jackcess 5.2.0 能力矩阵](plan/Jackcess-C++重写/03-Jackcess-5.2.0能力矩阵.md)盘点公开 API、上游测试、当前实现状态和 P0 证据缺口；当前是未冻结的初版清单。
+- [Jackcess 5.2.0 能力矩阵](plan/Jackcess-C++重写/03-Jackcess-5.2.0能力矩阵.md)按行为记录 Jackcess 公开 API、REA 实现状态和具体测试证据。P0 尚未冻结。
+- [详细开发计划](plan/Jackcess-C++重写/06-待办清单.md)列出工作包优先级、依赖和验收命令。
+- [近期接口契约](plan/Jackcess-C++重写/08-接口契约.md)记录写入、属性、ACE 读取和链接源的签名及行为边界。
 - [AI 协作指南](AGENTS.md)说明从哪里查证、如何实施和记录结果。
