@@ -1941,6 +1941,7 @@ Database Database::open(const std::filesystem::path& path, DatabaseOpenMode mode
         detail::WriteJournal::recover(path);
     }
     auto file = detail::PageFile::open(path);
+    file.require_decodable();
     const auto engine_version = file.format().version;
     if (mode == DatabaseOpenMode::read_write &&
         (engine_version == EngineVersion::ace2007 || engine_version == EngineVersion::ace2010 ||
@@ -1971,7 +1972,8 @@ void validate_options(const DatabaseOptions& options, const std::filesystem::pat
 
 Database Database::open(const std::filesystem::path& path, DatabaseOptions options) {
     validate_options(options, path);
-    auto file = detail::PageFile::open(path, options.code_page);
+    auto file = detail::PageFile::open(path, {options.code_page, options.page_codec});
+    file.require_decodable();
     auto schema = detail::read_table_schema_catalog(file);
     return Database(std::make_shared<detail::DatabaseState>(std::move(file),
                                                             std::move(schema),
@@ -1981,7 +1983,8 @@ Database Database::open(const std::filesystem::path& path, DatabaseOptions optio
 
 Database Database::open(const std::vector<std::uint8_t>& bytes, DatabaseOptions options) {
     validate_options(options, std::filesystem::path("<memory>"));
-    auto file = detail::PageFile::open(bytes, "<memory>", options.code_page);
+    auto file = detail::PageFile::open(bytes, "<memory>", {options.code_page, options.page_codec});
+    file.require_decodable();
     auto schema = detail::read_table_schema_catalog(file);
     return Database(std::make_shared<detail::DatabaseState>(std::move(file),
                                                             std::move(schema),
@@ -1991,6 +1994,7 @@ Database Database::open(const std::vector<std::uint8_t>& bytes, DatabaseOptions 
 
 Database Database::open(const std::vector<std::uint8_t>& bytes) {
     auto file = detail::PageFile::open(bytes);
+    file.require_decodable();
     auto schema = detail::read_table_schema_catalog(file);
     return Database(std::make_shared<detail::DatabaseState>(std::move(file),
                                                             std::move(schema),

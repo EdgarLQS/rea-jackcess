@@ -101,6 +101,9 @@ public:
     const FormatInfo& format() const noexcept;
     // For Jet4, inspects the database AccessVersion property in addition to the header.
     FileFormat file_format() const;
+    // True when the header declares encoded pages (or the container is always encoded, MSISAM).
+    // Opening a database with such pages needs DatabaseOptions::page_codec.
+    bool is_encoded() const;
     std::uint64_t page_count() const noexcept;
 
     // Returns stored page bytes. Page zero is not unmasked and encoded pages are not decoded.

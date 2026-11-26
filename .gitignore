@@ -5,3 +5,4 @@
 !/test_data_only_read/test_mdb.mdb
 .workbuddy/
 /build-asan
+/build-sanitizers/

@@ -285,6 +285,13 @@ if(EXISTS "${REA_JACKCESS_JET3_DIR}/queryV1997.mdb")
     set_tests_properties(jet3_query_read PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
+# A read-only handle needs a caller-supplied page codec for encoded pages; the test scrambles a
+# database it creates, so it needs no committed sample.
+add_executable(rea_jackcess_page_codec_tests page_codec_test.cpp)
+target_link_libraries(rea_jackcess_page_codec_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_page_codec_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME page_codec COMMAND rea_jackcess_page_codec_tests)
+
 # The same bytes must behave identically when opened from a buffer instead of a file.
 add_executable(rea_jackcess_memory_open_tests memory_open_test.cpp)
 target_link_libraries(rea_jackcess_memory_open_tests PRIVATE rea_jackcess::core)

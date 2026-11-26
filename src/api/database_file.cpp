@@ -64,6 +64,10 @@ FileFormat DatabaseFile::file_format() const {
     return detail::identify_file_format(impl_->page_file);
 }
 
+bool DatabaseFile::is_encoded() const {
+    return impl_->page_file.encoded();
+}
+
 std::uint64_t DatabaseFile::page_count() const noexcept {
     return impl_->page_file.page_count();
 }
