@@ -520,6 +520,20 @@ std::optional<double> jet4_date_serial(std::string_view text, std::string* error
                            : static_cast<double>(access_days) + day_fraction;
 }
 
+std::vector<std::uint8_t> read_long_value_bytes(const PageFile& file,
+                                                const std::string& table_name,
+                                                const EncodedTableRow& row,
+                                                const ColumnDefinition& column) {
+    if (column.column_number >= row.columns.size()) {
+        value_error(file, table_name, row, column, "Decoded row does not contain the column");
+    }
+    const auto& encoded = row.columns[column.column_number];
+    if (!encoded.bytes) {
+        return {};
+    }
+    return read_long_value(file, table_name, row, column, *encoded.bytes);
+}
+
 Jet4Value decode_jet4_value(const PageFile& file,
                             const std::string& table_name,
                             const EncodedTableRow& row,

@@ -7,8 +7,10 @@
 namespace rea_jackcess::detail {
 namespace {
 
-constexpr std::uint64_t row_count_offset = 12;
-constexpr std::uint64_t row_directory_offset = 14;
+constexpr std::uint64_t jet4_row_count_offset = 12;
+constexpr std::uint64_t jet4_row_directory_offset = 14;
+constexpr std::uint64_t jet3_row_count_offset = 8;
+constexpr std::uint64_t jet3_row_directory_offset = 10;
 constexpr std::uint16_t row_offset_mask = 0x1fff;
 constexpr std::uint16_t deleted_row_mask = 0x8000;
 constexpr std::uint16_t overflow_row_mask = 0x4000;
@@ -36,6 +38,10 @@ DataPage parse_data_page(const PageFile& file,
         corrupted_page(file, page_number, "Expected a data page");
     }
 
+    const bool jet3 = file.format().version == EngineVersion::jet3;
+    const std::uint64_t row_count_offset = jet3 ? jet3_row_count_offset : jet4_row_count_offset;
+    const std::uint64_t row_directory_offset =
+        jet3 ? jet3_row_directory_offset : jet4_row_directory_offset;
     const std::uint16_t row_count = read_u16(bytes, row_count_offset);
     const std::uint64_t directory_end = row_directory_offset + static_cast<std::uint64_t>(row_count) * 2;
     if (row_count > 255 || directory_end > bytes.size()) {

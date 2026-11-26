@@ -16,12 +16,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      - name: Toolchain versions
+        run: |
+          cmake --version | head -1
+          g++ --version | head -1
+          javac -version
       - name: Build and test
         run: bash .github/scripts/ci.sh
       - name: Upload the test log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ctest-log-linux-x86_64
           path: build/Testing/Temporary/LastTest.log
@@ -33,12 +38,12 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build and test
         run: bash .github/scripts/ci.sh
       - name: Upload the test log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ctest-log-linux-arm64
           path: build/Testing/Temporary/LastTest.log
@@ -49,7 +54,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build and test with sanitizers
         env:
           SANITIZE: "1"
@@ -58,7 +63,7 @@ jobs:
         run: bash .github/scripts/ci.sh
       - name: Upload the test log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ctest-log-sanitizers
           path: build/Testing/Temporary/LastTest.log

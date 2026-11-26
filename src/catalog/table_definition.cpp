@@ -1,5 +1,7 @@
 #include "table_definition.hpp"
 
+#include "jet3_table_definition.hpp"
+
 #include "../format/jet_format.hpp"
 #include "../page/page_types.hpp"
 #include "../value/text_codec.hpp"
@@ -198,6 +200,9 @@ std::int32_t signed_u32(std::uint32_t value) {
 }
 
 TableDefinition read_table_definition(const PageFile& file, std::uint64_t page_number) {
+    if (file.format().version == EngineVersion::jet3) {
+        return read_jet3_table_definition(file, page_number);
+    }
     if (!has_jet4_page_layout(file.format().version)) {
         throw DatabaseError(DatabaseErrorCode::unsupported_version,
                             "Jet4/ACE table definition layout requested for an unsupported engine version",

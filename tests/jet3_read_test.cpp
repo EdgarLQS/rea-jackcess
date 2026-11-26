@@ -56,22 +56,57 @@ int main(int argc, char** argv) {
         check(file.format().read_only, "Jet3 must be reported read-only");
         check(file.page_count() > 2, "sample has no pages beyond the header and catalog");
 
-        // The staged boundary: opening a Jet3 database still stops at catalog enumeration.
-        const auto expect_unsupported = [&](const std::string& label) {
-            try {
-                Database database = Database::open(path);
-                (void)database.tables();
-            } catch (const DatabaseError& error) {
-                check(error.code() == DatabaseErrorCode::unsupported_version,
-                      label + ": unexpected error code for a Jet3 database");
-                check(std::string(error.what()).find("unsupported engine version") != std::string::npos,
-                      label + ": the diagnostic no longer names the engine version");
-                check(error.path() == path, label + ": the error lost the file path");
-                return;
-            }
-            throw std::runtime_error(label + ": a Jet3 catalog read was accepted");
-        };
-        expect_unsupported("Jet3 open");
+        // The catalog now enumerates Jet3 tables and decodes their rows.
+        Database database = Database::open(path);
+        check(database.format().version == EngineVersion::jet3, "Database reports a different version");
+        const auto& tables = database.tables();
+        std::vector<std::string> names;
+        for (const auto& table : tables) {
+            names.push_back(table.name());
+        }
+        const std::vector<std::string> expected = {"MSysObjects", "MSysACEs", "MSysQueries",
+                                                   "MSysRelationships", "MSysModules2",
+                                                   "MSysModules", "Table1", "Table2", "Table3",
+                                                   "Table4"};
+        check(names == expected, "Jet3 table list changed");
+
+        const auto table1 = std::find_if(tables.begin(), tables.end(), [](const auto& table) {
+            return table.name() == "Table1";
+        });
+        check(table1 != tables.end(), "Table1 is missing");
+        check(table1->columns().size() == 9, "Table1 column count changed");
+        check(table1->row_count_header() == 2, "Table1 row count changed");
+
+        std::vector<rea_jackcess::Row> rows;
+        auto cursor = table1->rows();
+        while (auto row = cursor.next()) {
+            rows.push_back(*row);
+        }
+        check(rows.size() == 2, "Table1 live row count changed");
+
+        check(std::get<std::string>(rows[0].at(0)) == "a", "Table1 row 1 column A changed");
+        check(std::get<std::string>(rows[0].at(1)) == "b", "Table1 row 1 column B changed");
+        check(std::get<std::int8_t>(rows[0].at(2)) == 0, "Table1 row 1 column C changed");
+        check(std::get<std::int16_t>(rows[0].at(3)) == 0, "Table1 row 1 column D changed");
+        check(std::get<std::int32_t>(rows[0].at(4)) == 0, "Table1 row 1 column E changed");
+        check(std::get<double>(rows[0].at(5)) == 0.0, "Table1 row 1 column F changed");
+        check(std::get<rea_jackcess::DateTimeValue>(rows[0].at(6)).iso8601 == "1981-12-12T00:00",
+              "Table1 row 1 column G changed");
+        check(std::get<rea_jackcess::DecimalValue>(rows[0].at(7)).text == "0.0000",
+              "Table1 row 1 column H changed");
+        check(std::get<bool>(rows[0].at(8)) == false, "Table1 row 1 column I changed");
+
+        check(std::get<std::string>(rows[1].at(0)) == "abcdefg", "Table1 row 2 column A changed");
+        check(std::get<std::string>(rows[1].at(1)) == "hijklmnop", "Table1 row 2 column B changed");
+        check(std::get<std::int8_t>(rows[1].at(2)) == 2, "Table1 row 2 column C changed");
+        check(std::get<std::int16_t>(rows[1].at(3)) == 222, "Table1 row 2 column D changed");
+        check(std::get<std::int32_t>(rows[1].at(4)) == 333333333, "Table1 row 2 column E changed");
+        check(std::get<double>(rows[1].at(5)) == 444.555, "Table1 row 2 column F changed");
+        check(std::get<rea_jackcess::DateTimeValue>(rows[1].at(6)).iso8601 == "1974-09-21T00:00",
+              "Table1 row 2 column G changed");
+        check(std::get<rea_jackcess::DecimalValue>(rows[1].at(7)).text == "3.5000",
+              "Table1 row 2 column H changed");
+        check(std::get<bool>(rows[1].at(8)) == true, "Table1 row 2 column I changed");
 
         check(read_bytes(path) == before, "a read-only Jet3 open modified the sample");
         std::cout << "Jet3 read checks passed: " << path.filename().string() << " ("

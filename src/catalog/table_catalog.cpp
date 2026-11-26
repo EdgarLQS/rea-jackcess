@@ -26,9 +26,10 @@ void add_error(TableSchemaCatalog& catalog,
 }
 
 TableSchemaCatalog read_table_schema_catalog(const PageFile& file) {
-    if (!has_jet4_page_layout(file.format().version)) {
+    const bool jet3 = file.format().version == EngineVersion::jet3;
+    if (!has_jet4_page_layout(file.format().version) && !jet3) {
         throw DatabaseError(DatabaseErrorCode::unsupported_version,
-                            "Jet4/ACE table schema enumeration requested for an unsupported engine version",
+                            "Table schema enumeration requested for an unsupported engine version",
                             file.path());
     }
 
@@ -53,7 +54,8 @@ TableSchemaCatalog read_table_schema_catalog(const PageFile& file) {
 
         try {
             auto definition = read_table_definition(file, static_cast<std::uint64_t>(*object.id));
-            if (object.property_column_present) {
+            // Jet3 property maps have a different layout; nullability and defaults stay unknown.
+            if (object.property_column_present && !jet3) {
                 definition.column_properties_available = true;
                 if (object.property_error) {
                     add_error(result, name, *object.property_error, object.property_error_page);

@@ -36,8 +36,9 @@ if [ "${SKIP_APT:-0}" != "1" ]; then
         exit 2
     fi
     $SUDO apt-get update
+    # zlib1g-dev is required by find_package(ZLIB REQUIRED) in the top-level CMakeLists.
     $SUDO apt-get install -y --no-install-recommends \
-        build-essential cmake ninja-build default-jdk-headless curl python3 ca-certificates
+        build-essential cmake ninja-build default-jdk-headless curl python3 ca-certificates zlib1g-dev
 fi
 
 mkdir -p "$JAR_CACHE"

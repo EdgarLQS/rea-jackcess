@@ -7,7 +7,7 @@
 #include "index/index_cursor.hpp"
 #include "page/write_journal.hpp"
 #include "value/attachment_value.hpp"
-#include "value/jet4_value.hpp"
+#include "value/value_decode.hpp"
 #include "value/text_codec.hpp"
 #include "value/unicode_case.hpp"
 #include "write/jet4_database_creator.hpp"
@@ -901,7 +901,7 @@ struct RowCursor::Impl {
     Value decode_column(const detail::EncodedTableRow& candidate,
                        const detail::ColumnDefinition& column) const {
         try {
-            return detail::decode_jet4_value(table->database->file, table_name(), candidate, column);
+            return detail::decode_value(table->database->file, table_name(), candidate, column);
         } catch (const std::exception& error) {
             if (!error_handler) {
                 throw;
