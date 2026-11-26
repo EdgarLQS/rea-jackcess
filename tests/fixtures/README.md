@@ -46,6 +46,85 @@ Regeneration is only reproducible for the same Jackcess version: the fixtures fo
 [`plan/Jackcess-C++重写/README.md`](../../plan/Jackcess-C++重写/README.md). Update this table and
 the baseline record together when the fixture changes.
 
+## Generated Jet4 read fixtures
+
+Generated database files are **not committed**. The two Jet4 generators below write into the
+build tree, by default `build/fixtures`, which CMake exposes as the cache variable
+`REA_JACKCESS_FIXTURE_DIR` (`tests/CMakeLists.txt`). When a file is absent the matching CTest case
+exits with code 77 and CTest reports it as skipped, so a clean checkout stays green.
+
+Both generators need the fixed Jackcess 5.2.0 JAR (`$JACKCESS_JAR`) and a JDK:
+
+```sh
+javac -cp "$JACKCESS_JAR" -d "${TMPDIR:-/tmp}/rj-fixtures" tools/validation/JackcessJet4DataFixture.java
+javac -cp "$JACKCESS_JAR" -d "${TMPDIR:-/tmp}/rj-fixtures" tools/validation/JackcessJet4IndexFixture.java
+mkdir -p build/fixtures
+java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessJet4DataFixture build/fixtures/jet4-data-v2000.mdb V2000
+java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessJet4DataFixture build/fixtures/jet4-data-v2003.mdb V2003
+java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessJet4IndexFixture build/fixtures/jet4-index-v2000.mdb V2000
+java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessJet4IndexFixture build/fixtures/jet4-index-v2003.mdb V2003
+```
+
+Each generator prints the fixed-JAR reading of the file it just wrote, so the values can be
+compared with `rea-jackcess canonical` without a comparer. Regeneration reproduces the same values
+but not the same bytes: Jackcess stamps the object dates.
+
+### Jet4 data rows
+
+[`JackcessJet4DataFixture.java`](../../tools/validation/JackcessJet4DataFixture.java) writes
+`jet4-data-v2000.mdb` and `jet4-data-v2003.mdb`. The foreign-key and query fixtures only carry
+definitions, so every user table there is empty; these files add rows for the read path.
+
+Each file holds one user table, `DataRows`, with a LONG `Id` primary key and `Flag`, `ByteVal`,
+`IntVal`, `LongVal`, `FloatVal`, `DoubleVal`, `MoneyVal`, `DateVal`, `GuidVal`, `TextVal(50)`,
+`BinVal(32)`, `MemoVal`, and `OleVal` columns. Six rows cover:
+
+| Row | Coverage |
+|---|---|
+| 1 | every column type populated: non-ASCII text with a surrogate pair, 16-byte BINARY, 24-byte OLE, `1234.5678` MONEY, `2020-01-02 03:04:05` |
+| 2 | every nullable column NULL (a NULL BOOLEAN reads back as FALSE, matching Jackcess) |
+| 3 | a 9000-character MEMO that spans several data pages |
+| 4 | a short MEMO updated into the cross-page value, so the row is served from an overflow row |
+| 5 | boundaries: `-128`, `-32768`, `INT_MIN`, `-0.5`, `Double.MAX_VALUE`, `-0.0001`, zero GUID, empty TEXT/BINARY/MEMO/OLE, and the pre-epoch date `1899-12-29 18:30` |
+| 6 | text needing JSON escaping (quote, backslash, tab, CR, LF) and CRLF inside a MEMO |
+
+`jet4_data_read_v2000` / `jet4_data_read_v2003` assert the column definitions, all six rows,
+sequential and primary key scan order, reverse scan, a primary key lookup on the migrated row, and
+that the file bytes are unchanged after the read-only open.
+
+### Jet4 composite indexes
+
+[`JackcessJet4IndexFixture.java`](../../tools/validation/JackcessJet4IndexFixture.java) writes
+`jet4-index-v2000.mdb` and `jet4-index-v2003.mdb`. The single-column fixture above cannot reach
+composite TEXT keys, so these files add a second user table.
+
+`RegionCode` holds `Id` (LONG primary key), `Region` and `Code` (TEXT 8 units), `Seq` (LONG), and
+`Note` (MEMO), plus the unique ignore-nulls composite index `RegionCodeKey` over `(Region, Code)`.
+The nine rows and the fixed-JAR index order are:
+
+| Id | Region | Code | Index position |
+|---|---|---|---|
+| 1 | EU | A | 4 |
+| 2 | EU | B | 6 |
+| 3 | US | A | 8 |
+| 4 | AS | A | 2 |
+| 5 | EU | C | 7 |
+| 6 | NULL | Z | 1 (NULL sorts first) |
+| 7 | EU | NULL | 3 (NULL code sorts before `A`) |
+| 9 | US | B | 9 |
+| 10 | EU | AA | 5 (`A` sorts before `AA`) |
+
+The insertion order deliberately differs from the key order, so an index scan cannot match by
+accident on physical order. `LongValues` holds one row with a 9000-byte OLE payload that spans
+several data pages.
+
+`jet4_index_read_v2000` / `jet4_index_read_v2003` compare the index order, the reverse order, an
+`EU` prefix scan (both directions), the `[EU/A, US/A)` range, an exact composite lookup, and the
+full OLE payload, and assert the file bytes stay unchanged.
+
+Jackcess stores a NULL key part as an index entry rather than skipping it, and it rejects a second
+fully-NULL key as a duplicate of the first, so the fixture keeps only one NULL per key position.
+
 ## ACE complex-column read fixtures
 
 `complex-data-v2007.accdb`, `complex-data-v2010.accdb` and `unsupported-fields-v2007.accdb` are the

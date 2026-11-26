@@ -5,7 +5,7 @@
 Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b24f37bfdfe`，发布 JAR SHA-256 `9451d6f336cfaa82f5af178d5f6668b933cda4f27e261f29a1faa83630f95775`。REA 盘点快照为 `81afd3d`。P0 工作包矩阵尚未冻结，P1/P2 尚未放行。
 
 - **实现**使用已完成、部分实现、未实现、待核实。**验证**使用通过、失败、未运行。两列同时为「已完成」和「通过」时，只确认该行写明的操作与证据范围。
-- `C` 表示 2026-11-23 在 `81afd3d` 上复跑的 macOS ARM64 CTest，31/31 通过。其后是 CTest 用例名，括号内说明具体切片。样本来源见[语料清单](../../tests/fixtures/README.md)。`J` 表示[固定 JAR 历史探针](04-P0基线核验记录.md)中的对应章节。历史记录缺具体提交或样本哈希时保留缺口，由 W02 补跑并记录。Linux x86_64、Linux ARM64 和 Access 均待单独登记。
+- `C` 表示 2026-11-23 在 `81afd3d` 上复跑的 macOS ARM64 CTest，31/31 通过；2026-11-26 在 `only-read` 分支复跑：`f321d3f` 上 32/32（新增 `jet4_data_read_v2000/v2003`，ACE 用例增加只读打开前后字节比较），`c5eaca7` 之后 34/34（新增 `jet4_index_read_v2000/v2003`）。其后是 CTest 用例名，括号内说明具体切片。样本来源见[语料清单](../../tests/fixtures/README.md)。`J` 表示[固定 JAR 历史探针](04-P0基线核验记录.md)中的对应章节。历史记录缺具体提交或样本哈希时保留缺口，由 W02 补跑并记录。Linux x86_64、Linux ARM64 和 Access 均待单独登记。
 - 「两版」表示 V2000 与 V2003 的同一行为及同一证据范围。建库、建表、行增删改、索引、外键和恢复按需要分列两版。共用的长值行为保留一个编号。工作包编号见[开发计划](06-待办清单.md)，签名和边界见[接口契约](08-接口契约.md)。
 
 ## 数据库与格式
@@ -25,7 +25,7 @@ Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b2
 
 | ID | Jackcess 公开行为与格式 | REA 接口与位置 | 实现 | 验证与证据 | 工作包 |
 |---|---|---|---|---|---|
-| TB-01 | Database/Table 读取 Jet4 本地表、列和类型 | Database::tables / catalog | 部分实现 | 通过 · C catalog、real_sample（当前 schema 及语料） | W02 |
+| TB-01 | Database/Table 读取 Jet4 本地表、列和类型 | Database::tables / catalog | 部分实现 | 通过 · C catalog、real_sample（当前 schema 及语料）、jet4_data_read（13 种列类型与 6 行值） | W02 |
 | TB-02 | TableBuilder 创建 V2000 支持类型的空表及跨页表定义 | Database::create、TableBuilder / write | 已完成 | 通过 · C database_create（多页定义） | W02 |
 | TB-03 | TableBuilder 创建 V2003 已覆盖类型的空表；既有跨页定义可修改 | 同 TB-02 | 已完成 | 通过 · C database_create（V2003）、multipage_definition_v2003（后续改定义） | W02 |
 | TB-04 | TableUpdater、列类型和标识符规则 | TableBuilder、Table::add_index / write；加列及更广标识符规则待补 | 部分实现 | 通过 · C database_create（当前结构写入范围） | W10 |
@@ -35,8 +35,8 @@ Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b2
 | RW-03 | Table.updateRow/deleteRow，V2000 已支持表形态的行更新、迁移、删除 | Table::update_row/delete_row / write | 已完成 | 通过 · C database_create（更新、迁移及删除） | W02 |
 | RW-04 | Table.updateRow/deleteRow，V2003 已支持表形态的行更新、删除 | 同 RW-03 | 已完成 | 通过 · C database_create（V2003 写入切片） | W02 |
 | RW-05 | Jet4 Memo/OLE 多页载荷读写及旧页处理，两版 | Table / value、write；读写及未引用页回收已有 | 已完成 | 通过 · C database_create（长值更新、共享页保留）；J「长值旧页回收」 | W02 |
-| RW-06 | 两版 SHORT_DATE_TIME 读写及纪元前值 | Table / value、write | 已完成 | 通过 · C date_time_v2000/v2003；J「纪元前值写入与回读」 | W02 |
-| RW-07 | Cursor/RowId 定位、投影、过滤、前后向游标，两版 | RowCursor、Table::rows / api、catalog | 已完成 | 通过 · C cursor_v2000/v2003（所列操作） | W02 |
+| RW-06 | 两版 SHORT_DATE_TIME 读写及纪元前值 | Table / value、write | 已完成 | 通过 · C date_time_v2000/v2003、jet4_data_read（1899-12-29 读出）；J「纪元前值写入与回读」 | W02 |
+| RW-07 | Cursor/RowId 定位、投影、过滤、前后向游标，两版 | RowCursor、Table::rows / api、catalog | 已完成 | 通过 · C cursor_v2000/v2003（所列操作）、jet4_data_read（顺序、正/反序索引与迁移行定位） | W02 |
 | RW-08 | DataType 与 AutoNumber 生成、完整 Numeric 和类型覆盖 | Value、ColumnInfo / value、write；基线各类型要单独补齐 | 部分实现 | 通过 · C database_create（已支持的类型） | W10 |
 | RW-09 | V2000 写入被中断后恢复 | Database::open / page；写前日志为 REA 自身契约 | 已完成 | 通过 · C crash_recovery_v2000（模拟中断） | W02 |
 | RW-10 | V2003 写入被中断后恢复 | 同 RW-09 | 已完成 | 通过 · C crash_recovery_v2003（模拟中断） | W02 |
@@ -45,10 +45,10 @@ Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b2
 
 | ID | Jackcess 公开行为与格式 | REA 接口与位置 | 实现 | 验证与证据 | 工作包 |
 |---|---|---|---|---|---|
-| IX-01 | IndexBuilder/IndexCursor，V2000 单列或合成复合键建索引、维护、查找 | Table::add_index、find_row_by_index / index、write | 已完成 | 通过 · C database_create、cursor_v2000（当前键集合） | W02 |
-| IX-02 | 同 IX-01，V2003 | 同 IX-01 | 已完成 | 通过 · C database_create、cursor_v2003（当前键集合） | W02 |
+| IX-01 | IndexBuilder/IndexCursor，V2000 单列或合成复合键建索引、维护、查找 | Table::add_index、find_row_by_index / index、write | 已完成 | 通过 · C database_create、cursor_v2000（当前键集合）、jet4_data_read_v2000（索引遍历与按键查找） | W02 |
+| IX-02 | 同 IX-01，V2003 | 同 IX-01 | 已完成 | 通过 · C database_create、cursor_v2003（当前键集合）、jet4_data_read_v2003（索引遍历与按键查找） | W02 |
 | IX-03 | 两版单列 TEXT/MEMO 六种已覆盖排序描述符，含截断及升降序 | IndexBuilder、Table::rows_by_index / index、write | 已完成 | 通过 · C database_create（排序与 MEMO）；J「MEMO 列索引」 | W02 |
-| IX-04 | 两版复合 TEXT/MEMO 键的一致排序、前缀、唯一约束与特殊空值 | Table::rows_by_index_prefix、add_index / index、write | 部分实现 | 未运行 · 复合文本与 MEMO 组合边界 | W02 |
+| IX-04 | 两版复合 TEXT/MEMO 键的一致排序、前缀、唯一约束与特殊空值 | Table::rows_by_index_prefix、add_index / index、write | 部分实现 | 通过 · C jet4_index_read_v2000/v2003（复合 TEXT 排序、前缀、区间、精确查找与 NULL 键位置）；写入侧复合键与 MEMO 组合未运行 | W02 |
 | IX-05 | 两版清空叶页时维护叶链及回收页 | Table::delete_row / write | 已完成 | 通过 · C index_merge_v2000/v2003 | W02 |
 | IX-06 | 删除跨多级节点后的可达性、节点页合并与空间回收 | Table::delete_row / write，仅叶页回收 | 部分实现 | 未运行 · 节点合并 | W02 |
 | IX-07 | 既有索引异常策略及切换选项 | 索引拒绝规则已有；writeBrokenIndex 选项待补 | 部分实现 | 未运行 · 策略对照 | W10 |
