@@ -79,6 +79,14 @@ foreach(query_fixture v2000 v2003)
                 "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/query-${query_fixture}.mdb")
 endforeach()
 
+# The read-side error taxonomy and its context fields are a caller-visible contract.
+add_executable(rea_jackcess_error_context_tests error_context_test.cpp)
+target_link_libraries(rea_jackcess_error_context_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_error_context_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME error_context
+    COMMAND rea_jackcess_error_context_tests
+            "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/complex-data-v2007.accdb")
+
 add_executable(rea_jackcess_csv_tests csv_test.cpp)
 target_link_libraries(rea_jackcess_csv_tests PRIVATE rea_jackcess::core)
 target_include_directories(rea_jackcess_csv_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
