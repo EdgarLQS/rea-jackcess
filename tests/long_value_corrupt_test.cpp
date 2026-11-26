@@ -108,17 +108,24 @@ std::size_t locate_definition(const std::vector<std::uint8_t>& page,
 }
 
 template <typename Operation>
-void expect_memo_error(const std::string& label, Operation operation) {
+void expect_memo_error(const std::string& label,
+                       const std::filesystem::path& expected_path,
+                       std::uint16_t expected_row,
+                       Operation operation) {
     try {
         operation();
     } catch (const DatabaseError& error) {
         check(error.code() == DatabaseErrorCode::corrupted_file,
               label + ": unexpected error code " + std::to_string(static_cast<int>(error.code())));
+        check(error.path() == expected_path, label + ": the error lost its file path");
         check(error.context().column_name.has_value() &&
                   *error.context().column_name == "MemoVal",
               label + ": the error lost the column context");
         check(error.context().table_name.has_value() && *error.context().table_name == "DataRows",
               label + ": the error lost the table context");
+        check(error.context().row_number.has_value() &&
+                  *error.context().row_number == expected_row,
+              label + ": the error lost the row context");
         check(error.page_number().has_value(), label + ": the error lost the page context");
         std::cout << "  " << label << ": code " << static_cast<int>(error.code()) << ", page "
                   << *error.page_number() << ", column MemoVal\n";
@@ -178,7 +185,10 @@ int main(int argc, char** argv) {
             bytes[field_offset + 7] = 0x7f;
             const auto path = temporary_copy(fixture, directory, "bad-page.mdb");
             write_file(path, bytes);
-            expect_memo_error("pointer past the end of the file", [&] { read_data_rows(path); });
+            expect_memo_error("pointer past the end of the file",
+                              path,
+                              target.row_number,
+                              [&] { read_data_rows(path); });
             check(read_file(path) == bytes, "the failed read rewrote the bad-page copy");
         }
 
@@ -188,7 +198,10 @@ int main(int argc, char** argv) {
             bytes[field_offset + 4] = 200;
             const auto path = temporary_copy(fixture, directory, "bad-row.mdb");
             write_file(path, bytes);
-            expect_memo_error("pointer to a missing row", [&] { read_data_rows(path); });
+            expect_memo_error("pointer to a missing row",
+                              path,
+                              target.row_number,
+                              [&] { read_data_rows(path); });
             check(read_file(path) == bytes, "the failed read rewrote the bad-row copy");
         }
 
