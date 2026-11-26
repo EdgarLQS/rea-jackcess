@@ -214,3 +214,11 @@ target_link_libraries(rea_jackcess_perf_read_tests PRIVATE rea_jackcess::core)
 target_include_directories(rea_jackcess_perf_read_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 add_test(NAME perf_read_200k COMMAND rea_jackcess_perf_read_tests 200000)
 set_tests_properties(perf_read_200k PROPERTIES TIMEOUT 900 RUN_SERIAL TRUE)
+
+# A parent row pointing at a flat-table row that does not exist yields no complex values.
+add_executable(rea_jackcess_complex_link_corrupt_tests complex_link_corrupt_test.cpp)
+target_link_libraries(rea_jackcess_complex_link_corrupt_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_complex_link_corrupt_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME complex_link_corrupt
+    COMMAND rea_jackcess_complex_link_corrupt_tests
+            "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/complex-data-v2007.accdb")

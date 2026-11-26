@@ -5,7 +5,7 @@
 Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b24f37bfdfe`，发布 JAR SHA-256 `9451d6f336cfaa82f5af178d5f6668b933cda4f27e261f29a1faa83630f95775`。REA 盘点快照为 `81afd3d`。P0 工作包矩阵尚未冻结，P1/P2 尚未放行。
 
 - **实现**使用已完成、部分实现、未实现、待核实。**验证**使用通过、失败、未运行。两列同时为「已完成」和「通过」时，只确认该行写明的操作与证据范围。
-- `C` 表示 2026-11-23 在 `81afd3d` 上复跑的 macOS ARM64 CTest，31/31 通过；2026-11-26 在 `only-read` 分支复跑：`f321d3f` 上 32/32（新增 `jet4_data_read_v2000/v2003`，ACE 用例增加只读打开前后字节比较），`62f6480` 上 36/36，其后加入 `corrupt_read_v2007/v2010/jet4`、`long_value_corrupt`、`perf_read_200k` 后为 41/41（`jet4_*`、`ace_extra_*`、`corrupt_read_jet4` 依赖本地生成的语料，缺件时跳过）。其后是 CTest 用例名，括号内说明具体切片。样本来源见[语料清单](../../tests/fixtures/README.md)。`J` 表示[固定 JAR 历史探针](04-P0基线核验记录.md)中的对应章节。历史记录缺具体提交或样本哈希时保留缺口，由 W02 补跑并记录。Linux x86_64、Linux ARM64 和 Access 均待单独登记。
+- `C` 表示 2026-11-23 在 `81afd3d` 上复跑的 macOS ARM64 CTest，31/31 通过；2026-11-26 在 `only-read` 分支复跑：`f321d3f` 上 32/32（新增 `jet4_data_read_v2000/v2003`，ACE 用例增加只读打开前后字节比较），`62f6480` 上 36/36，其后加入 `corrupt_read_v2007/v2010/jet4`、`long_value_corrupt`、`perf_read_200k`、`complex_link_corrupt` 后为 42/42（`jet4_*`、`ace_extra_*`、`corrupt_read_jet4` 依赖本地生成的语料，缺件时跳过）。其后是 CTest 用例名，括号内说明具体切片。样本来源见[语料清单](../../tests/fixtures/README.md)。`J` 表示[固定 JAR 历史探针](04-P0基线核验记录.md)中的对应章节。历史记录缺具体提交或样本哈希时保留缺口，由 W02 补跑并记录。Linux x86_64、Linux ARM64 和 Access 均待单独登记。
 - 「两版」表示 V2000 与 V2003 的同一行为及同一证据范围。建库、建表、行增删改、索引、外键和恢复按需要分列两版。共用的长值行为保留一个编号。工作包编号见[开发计划](06-待办清单.md)，签名和边界见[接口契约](08-接口契约.md)。
 
 ## 数据库与格式
