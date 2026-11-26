@@ -23,6 +23,8 @@ JACKCESS_VERSION="5.2.0"
 JACKCESS_SHA256="9451d6f336cfaa82f5af178d5f6668b933cda4f27e261f29a1faa83630f95775"
 LANG3_SHA256="7b96bf3ee68949abb5bc465559ac270e0551596fa34523fddf890ec418dde13c"
 COMMONS_LOGGING_SHA256="daddea1ea0be0f56978ab3006b8ac92834afeefbd9b7e4e6316fca57df0fa636"
+JET3_TARBALL_SHA256="d1ba0283d2b9ffce69ce98660b20f2381f77c8fa9a761943769e95ec02aa72d1"
+JET3_SAMPLES="${JET3_SAMPLES:-/tmp/rea-jet3-samples}"
 
 if [ "$(id -u)" = "0" ]; then
     SUDO=""
@@ -78,6 +80,9 @@ case "$FIXTURE_DIR" in
 esac
 
 cmake_args=(-S . -B "$BUILD_DIR" -G Ninja -DREA_JACKCESS_FIXTURE_DIR="$FIXTURE_ABS")
+if [ -d "$JET3_SAMPLES" ]; then
+    cmake_args+=("-DREA_JACKCESS_JET3_DIR=$JET3_SAMPLES")
+fi
 if [ "${SANITIZE:-0}" = "1" ]; then
     cmake_args+=(
         -DCMAKE_BUILD_TYPE=Debug
@@ -88,6 +93,22 @@ else
     cmake_args+=(-DCMAKE_BUILD_TYPE=RelWithDebInfo)
 fi
 cmake "${cmake_args[@]}"
+# Jet3 cases need the upstream V1997 samples. Fetch the pinned 5.2.0 source archive and keep only
+# that directory; when the download fails those cases simply stay unregistered.
+if [ ! -f "$JET3_SAMPLES/common1V1997.mdb" ]; then
+    tarball="/tmp/jackcess-5.2.0-source.tar.gz"
+    if curl -fsSL -o "$tarball" \
+        "https://github.com/spannm/jackcess/archive/refs/tags/jackcess-5.2.0.tar.gz"; then
+        check_hash "$JET3_TARBALL_SHA256" "$tarball"
+        mkdir -p "$JET3_SAMPLES"
+        tar -xzf "$tarball" -C "$JET3_SAMPLES" --strip-components=6 \
+            jackcess-jackcess-5.2.0/src/test/resources/data/V1997
+        echo "Jet3 samples: $(find "$JET3_SAMPLES" -name '*.mdb' | wc -l) files"
+    else
+        echo "Jet3 sample download failed; Jet3 cases stay unregistered" >&2
+    fi
+fi
+
 JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
 cmake --build "$BUILD_DIR" -j"$JOBS"
 
