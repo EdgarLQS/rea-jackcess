@@ -185,3 +185,17 @@ foreach(ace_extra_version v2016 v2019)
                 "${REA_JACKCESS_FIXTURE_DIR}/ace-${ace_extra_version}.accdb" ${ace_extra_version})
     set_tests_properties(ace_extra_read_${ace_extra_version} PROPERTIES SKIP_RETURN_CODE 77)
 endforeach()
+
+# Damaged copies of committed fixtures must fail explicitly, never silently.
+add_executable(rea_jackcess_corrupt_read_tests corrupt_read_test.cpp)
+target_link_libraries(rea_jackcess_corrupt_read_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_corrupt_read_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+foreach(corrupt_version v2007 v2010)
+    add_test(NAME corrupt_read_${corrupt_version}
+        COMMAND rea_jackcess_corrupt_read_tests
+                "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/complex-data-${corrupt_version}.accdb")
+endforeach()
+# The generated Jet4 fixture adds a MEMO/OLE table; it is skipped until the generator ran.
+add_test(NAME corrupt_read_jet4
+    COMMAND rea_jackcess_corrupt_read_tests "${REA_JACKCESS_FIXTURE_DIR}/jet4-data-v2000.mdb")
+set_tests_properties(corrupt_read_jet4 PROPERTIES SKIP_RETURN_CODE 77)
