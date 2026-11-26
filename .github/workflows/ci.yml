@@ -27,12 +27,10 @@ jobs:
           path: build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
 
-  # GitHub-hosted arm64 runners are not available to private repositories. Point the repository
-  # variable REA_ARM64_RUNNER at a self-hosted or paid arm64 label to enable this job.
+  # Native arm64 runner, available to public repositories.
   linux-arm64:
     name: linux-arm64
-    if: ${{ vars.REA_ARM64_RUNNER != '' }}
-    runs-on: ${{ vars.REA_ARM64_RUNNER }}
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -43,33 +41,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ctest-log-linux-arm64
-          path: build/Testing/Temporary/LastTest.log
-          if-no-files-found: ignore
-
-  # Emulated arm64 fallback for private repositories: the same script runs inside an arm64
-  # container, so the build and the test binaries really are aarch64. Slow, so it does not gate
-  # the workflow until a native runner exists.
-  linux-arm64-qemu:
-    name: linux-arm64-qemu
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - name: Build and test under qemu
-        env:
-          CTEST_EXCLUDE: perf_read_200k
-        run: |
-          docker run --rm --platform linux/arm64 \
-            -v "$PWD:/src" -w /src \
-            -e CTEST_EXCLUDE \
-            ubuntu:24.04 bash -lc 'bash .github/scripts/ci.sh'
-      - name: Upload the test log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ctest-log-linux-arm64-qemu
           path: build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
 
