@@ -273,3 +273,11 @@ add_test(NAME memory_open
     COMMAND rea_jackcess_memory_open_tests
             "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/complex-data-v2007.accdb"
             "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/fk-v2000.mdb")
+
+# OLE streams over the generated Jet4 index fixture (LongValues carries a 9000-byte payload).
+add_executable(rea_jackcess_ole_stream_tests ole_stream_test.cpp)
+target_link_libraries(rea_jackcess_ole_stream_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_ole_stream_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME ole_stream
+    COMMAND rea_jackcess_ole_stream_tests "${REA_JACKCESS_FIXTURE_DIR}/jet4-index-v2000.mdb")
+set_tests_properties(ole_stream PROPERTIES SKIP_RETURN_CODE 77)

@@ -17,6 +17,7 @@
 #include "write/jet4_table_creator.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <charconv>
 #include <chrono>
@@ -1398,6 +1399,44 @@ std::uint32_t Table::row_count_header() const {
 const std::vector<ColumnInfo>& Table::columns() const {
     const auto& state = checked_state(state_);
     return state.database->columns[state.schema_index];
+}
+
+OleStream Table::ole_stream(std::string_view column_name, const Row& row) const {
+    const auto& state = checked_state(state_);
+    const auto& columns = state.database->columns[state.schema_index];
+    const auto found = std::find_if(columns.begin(), columns.end(), [&](const ColumnInfo& column) {
+        if (column.name.size() != column_name.size()) {
+            return false;
+        }
+        return std::equal(column.name.begin(), column.name.end(), column_name.begin(),
+                          [](char left, char right) {
+                              return std::tolower(static_cast<unsigned char>(left)) ==
+                                     std::tolower(static_cast<unsigned char>(right));
+                          });
+    });
+    if (found == columns.end()) {
+        throw DatabaseError(DatabaseErrorCode::unsupported_operation,
+                            "Table has no column named " + std::string(column_name),
+                            state.database->file.path());
+    }
+    if (found->type != DataType::ole) {
+        throw DatabaseError(DatabaseErrorCode::unsupported_operation,
+                            "Column " + found->name + " is not an OLE column",
+                            state.database->file.path());
+    }
+    const auto index = static_cast<std::size_t>(found - columns.begin());
+    if (index >= row.size()) {
+        throw DatabaseError(DatabaseErrorCode::unsupported_operation,
+                            "Row does not contain column " + found->name,
+                            state.database->file.path());
+    }
+    const auto* blob = std::get_if<BlobValue>(&row.at(index));
+    if (blob == nullptr) {
+        throw DatabaseError(DatabaseErrorCode::unsupported_operation,
+                            "Row has no OLE value in column " + found->name,
+                            state.database->file.path());
+    }
+    return OleStream(blob->bytes, found->name);
 }
 
 const std::vector<IndexInfo>& Table::indexes() const {

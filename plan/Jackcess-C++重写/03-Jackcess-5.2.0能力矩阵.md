@@ -83,7 +83,7 @@ Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b2
 | AC-10 | 非标记 LONG 外键回退和异常关联结构 | Table::complex_values / catalog、api | 部分实现 | 通过 · C catalog（合成回退）；真实样本未运行 | W05 |
 | AC-11 | V2007/V2010/V2016/V2019 创建及既有库普通行写入 | Database、Table / write；当前拒绝 ACE 写打开 | 未实现 | 未运行 · 写入 | W06 |
 | AC-12 | 复杂值附件、多值和版本历史的写入操作 | ComplexValueInfo / api、write | 未实现 | 未运行 · 写入 | W07 |
-| AC-13 | OleBlob 包装、流式读取及资源生命周期 | AttachmentValue / value；已有附件 wrapper 解码 | 部分实现 | 通过 · C attachment_value（解码）；通用流接口未运行 | W09 |
+| AC-13 | OleBlob 包装、流式读取及资源生命周期 | OleStream / Table::ole_stream 只读取流（seek/read/read_range） | 已完成 | 通过 · C attachment_value（解码）、ole_stream（9000 字节跨页 OLE 的顺序读、定位读、尾部截断与非 OLE 列拒绝） | W09 |
 
 ## 保存查询、导入导出与扩展点
 

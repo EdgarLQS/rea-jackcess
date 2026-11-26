@@ -1,6 +1,7 @@
 #pragma once
 
 #include "complex_value.hpp"
+#include "ole_stream.hpp"
 #include "property.hpp"
 #include "row_cursor.hpp"
 
@@ -203,6 +204,10 @@ public:
     // Scans only the named columns (case-insensitive), optionally skipping rows for which the
     // filter returns false. `Row::at` indexes the projected order, not the table order.
     RowCursor rows(const std::vector<std::string>& column_names, RowFilter filter = {}) const;
+    // Opens the OLE payload of one row as a seekable read-only stream. The column must be an OLE
+    // column and the row must hold a value for it.
+    OleStream ole_stream(std::string_view column_name, const Row& row) const;
+
     // Reads raw rows from a complex column's flat table for the value stored in `parent_row_id`.
     // Uses a foreign-key-leading index when present; otherwise scans the flat table.
     std::vector<Row> raw_complex_values(std::string_view complex_column_name, RowId parent_row_id) const;

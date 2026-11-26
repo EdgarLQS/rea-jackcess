@@ -60,6 +60,7 @@ endfunction()
 rea_jackcess_add_package(api
     api/complex_values.cpp
     api/database.cpp
+    api/ole_stream.cpp
     api/database_file.cpp
     api/relationships.cpp
     api/queries.cpp
