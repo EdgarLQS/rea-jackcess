@@ -51,7 +51,7 @@ value ──> page, format, util
 page ──> format
 ```
 
-依赖只从上层指向下层，不以回调或头文件引用形成包循环。PGeo 适配器通过公开 API 使用核心库，并单独依赖 GDAL；核心库不依赖 GDAL、JVM 或 libmdb。`tools/cli/` 和 `tests/` 是独立消费者；canonical 诊断工具目前可直接读取内部目录结构，以保留解析阶段和字段级诊断。
+依赖只从上层指向下层，不以回调或头文件引用形成包循环。`adapters/pgeo/` 构建为独立目标 `rea_jackcess::pgeo`，当前只通过公开 API 使用核心库，负责图层目录映射和原始 SHAPE 读取；目标产品的几何解码可另行依赖 GDAL。核心库不依赖 GDAL、JVM 或 libmdb。`tools/cli/` 和 `tests/` 是独立消费者；canonical 诊断工具目前可直接读取内部目录结构，以保留解析阶段和字段级诊断。
 
 ## 构建与实现约定
 

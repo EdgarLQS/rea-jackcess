@@ -164,6 +164,15 @@ if(EXISTS "${REA_JACKCESS_PGEO_SAMPLE}")
         COMMAND rea_jackcess_real_sample_tests "${REA_JACKCESS_PGEO_SAMPLE}")
 endif()
 
+add_executable(rea_jackcess_pgeo_tests pgeo_layer_reader_test.cpp)
+target_link_libraries(rea_jackcess_pgeo_tests PRIVATE rea_jackcess::pgeo)
+target_include_directories(rea_jackcess_pgeo_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME pgeo_layer_reader COMMAND rea_jackcess_pgeo_tests)
+if(EXISTS "${REA_JACKCESS_PGEO_SAMPLE}")
+    add_test(NAME pgeo_sample_read
+        COMMAND rea_jackcess_pgeo_tests sample "${REA_JACKCESS_PGEO_SAMPLE}")
+endif()
+
 # The composite-index fixtures follow the same generated-on-demand rule.
 add_executable(rea_jackcess_jet4_index_read_tests jet4_index_read_test.cpp)
 target_link_libraries(rea_jackcess_jet4_index_read_tests PRIVATE rea_jackcess::core)
