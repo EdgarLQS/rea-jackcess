@@ -290,3 +290,9 @@ if(EXISTS "${REA_JACKCESS_JET3_DIR}/common1V1997.mdb")
         COMMAND rea_jackcess_database_options_tests "${REA_JACKCESS_JET3_DIR}/common1V1997.mdb")
     set_tests_properties(database_options PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+# The gigabyte scenario takes about a minute and one gigabyte of temporary space, so it stays
+# disabled by default and is run explicitly when the performance gates are re-measured.
+add_test(NAME perf_read_1gb
+    COMMAND rea_jackcess_perf_read_tests 130000 4000)
+set_tests_properties(perf_read_1gb PROPERTIES DISABLED TRUE LABELS "large" TIMEOUT 900)
