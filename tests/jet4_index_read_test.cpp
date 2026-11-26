@@ -120,6 +120,33 @@ void check_long_values(Table table) {
     }
 }
 
+// A composite index whose second column is MEMO: the key is truncated to 255 UTF-16 units, the
+// row keeps the full text, and a NULL leading column sorts first.
+void check_mixed_keys(Table table) {
+    const auto& columns = table.columns();
+    check(columns.size() == 3, "unexpected MixedKeys column count");
+    const auto& indexes = table.indexes();
+    check(indexes.size() == 2, "unexpected MixedKeys index count");
+    const auto& index = indexes[1];
+    check(index.name == "TagMemo" && index.unique, "unexpected MixedKeys index flags");
+    check(index.columns.size() == 2 && index.columns[0].name == "Tag" &&
+              index.columns[1].name == "MemoKey",
+          "unexpected MixedKeys index columns");
+    check(index.unique_entry_count == 5, "unexpected MixedKeys index entry count");
+
+    check_ids(collect(table.rows_by_index("TagMemo")), {5, 2, 1, 4, 3}, "composite MEMO index scan");
+    check_ids(collect(table.rows_by_index_prefix("TagMemo", {std::string("EU")})), {2, 1, 4},
+              "composite MEMO prefix scan");
+
+    const auto long_memo = "memo-c" + std::string(400, 'y');
+    const auto found = table.find_row_by_index(
+        "TagMemo", std::vector<Value>{std::string("EU"), long_memo});
+    check(found.has_value() && id_of(*found) == 4, "composite MEMO lookup returned the wrong row");
+    const auto* memo = std::get_if<rea_jackcess::MemoValue>(&found->at(2));
+    check(memo != nullptr && memo->text == long_memo,
+          "the truncated key row did not keep its full memo text");
+}
+
 // A MEMO key is indexed on its first 255 UTF-16 units, so row 4 is a 606-character memo whose
 // key only covers the truncated prefix. NULL sorts first, as with TEXT keys.
 void check_memo_keys(Table table) {
@@ -214,6 +241,7 @@ int main(int argc, char** argv) {
             Table long_values = get_table(database, "LongValues");
             check_long_values(long_values);
             check_memo_keys(get_table(database, "MemoKeys"));
+            check_mixed_keys(get_table(database, "MixedKeys"));
         }
         check(read_bytes(fixture) == before, "a read-only open modified the fixture");
         std::cout << "Jet4 composite index read checks passed: " << fixture.filename().string() << '\n';

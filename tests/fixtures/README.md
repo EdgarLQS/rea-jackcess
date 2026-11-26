@@ -135,10 +135,23 @@ prefix, while the row itself must still read all 606 characters. NULL sorts firs
 | 4 | `memo-d` + 600 `x` | 5 (truncated key) | 255 bytes |
 | 5 | NULL | 1 (NULL sorts first) | empty |
 
+`MixedKeys` adds a unique composite index over `(Tag, MemoKey)`, so the second key column is a
+MEMO truncated to 255 UTF-16 units. Row 4 stores a 406-character memo: the index entry keeps the
+prefix, the row keeps the full text, and a NULL tag sorts first.
+
+| Id | Tag | MemoKey | Index position |
+|---|---|---|---|
+| 1 | EU | memo-b | 3 |
+| 2 | EU | memo-a | 2 |
+| 3 | US | memo-a | 5 |
+| 4 | EU | `memo-c` + 400 `y` | 4 (truncated key) |
+| 5 | NULL | memo-z | 1 (NULL sorts first) |
+
 `jet4_index_read_v2000` / `jet4_index_read_v2003` compare the composite index order, the reverse
 order, an `EU` prefix scan (both directions), the `[EU/A, US/A)` range, an exact composite lookup,
 the MEMO index order in both directions, the truncated-key row text, the 255-byte BINARY payload,
-the full OLE payload, and assert the file bytes stay unchanged.
+the full OLE payload, the `(Tag, MemoKey)` composite index order and its prefix scan, and assert the
+file bytes stay unchanged.
 
 Jackcess stores a NULL key part as an index entry rather than skipping it, and it rejects a second
 fully-NULL key as a duplicate of the first, so the fixture keeps only one NULL per key position.

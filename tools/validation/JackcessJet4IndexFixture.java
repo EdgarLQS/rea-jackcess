@@ -73,6 +73,15 @@ public final class JackcessJet4IndexFixture {
             .withPrimaryKey("Id")
             .toTable(db);
 
+        // A composite index over TEXT and MEMO: the MEMO part is truncated to 255 UTF-16 units.
+        new TableBuilder("MixedKeys")
+            .addColumn(new ColumnBuilder("Id", DataType.LONG))
+            .addColumn(new ColumnBuilder("Tag", DataType.TEXT).withLengthInUnits(8))
+            .addColumn(new ColumnBuilder("MemoKey", DataType.MEMO))
+            .withPrimaryKey("Id")
+            .addIndex(new IndexBuilder("TagMemo").withColumns("Tag", "MemoKey").withUnique())
+            .toTable(db);
+
         // A MEMO key is truncated to 255 UTF-16 units for indexing, and BINARY stops at 255 bytes.
         new TableBuilder("MemoKeys")
             .addColumn(new ColumnBuilder("Id", DataType.LONG))
@@ -88,6 +97,14 @@ public final class JackcessJet4IndexFixture {
         row.put("Id", id);
         row.put("MemoKey", memo);
         row.put("BinMax", binary);
+        table.addRowFromMap(row);
+    }
+
+    private static void addMixedRow(Table table, int id, String tag, String memo) throws Exception {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("Id", id);
+        row.put("Tag", tag);
+        row.put("MemoKey", memo);
         table.addRowFromMap(row);
     }
 
@@ -121,6 +138,13 @@ public final class JackcessJet4IndexFixture {
         addMemoRow(memos, 3, "memo-c", ramp(255, 0x40));
         addMemoRow(memos, 4, "memo-d" + "x".repeat(600), ramp(255, 0x50));
         addMemoRow(memos, 5, null, new byte[0]);
+
+        Table mixed = db.getTable("MixedKeys");
+        addMixedRow(mixed, 1, "EU", "memo-b");
+        addMixedRow(mixed, 2, "EU", "memo-a");
+        addMixedRow(mixed, 3, "US", "memo-a");
+        addMixedRow(mixed, 4, "EU", "memo-c" + "y".repeat(400));
+        addMixedRow(mixed, 5, null, "memo-z");
     }
 
     private static String hex(byte[] bytes) {
@@ -134,7 +158,7 @@ public final class JackcessJet4IndexFixture {
     private static void dump(Path path) throws Exception {
         List<String> lines = new ArrayList<>();
         try (Database db = DatabaseBuilder.open(path.toFile())) {
-            for (String name : List.of("RegionCode", "LongValues", "MemoKeys")) {
+            for (String name : List.of("RegionCode", "LongValues", "MemoKeys", "MixedKeys")) {
                 Table table = db.getTable(name);
                 lines.add("table " + name);
                 for (var column : table.getColumns()) {
