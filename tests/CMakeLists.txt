@@ -222,3 +222,16 @@ target_include_directories(rea_jackcess_complex_link_corrupt_tests PRIVATE "${PR
 add_test(NAME complex_link_corrupt
     COMMAND rea_jackcess_complex_link_corrupt_tests
             "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/complex-data-v2007.accdb")
+
+# Jet3 support is staged; the upstream 5.2.0 test resources are only available on machines that
+# carry a Jackcess checkout. Point REA_JACKCESS_JET3_DIR at its V1997 directory to run the check.
+set(REA_JACKCESS_JET3_DIR "$ENV{HOME}/Documents/GitHub/jackcess/src/test/resources/data/V1997"
+    CACHE PATH "Directory holding the upstream V1997 samples")
+if(EXISTS "${REA_JACKCESS_JET3_DIR}/common1V1997.mdb")
+    add_executable(rea_jackcess_jet3_read_tests jet3_read_test.cpp)
+    target_link_libraries(rea_jackcess_jet3_read_tests PRIVATE rea_jackcess::core)
+    target_include_directories(rea_jackcess_jet3_read_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME jet3_read
+        COMMAND rea_jackcess_jet3_read_tests "${REA_JACKCESS_JET3_DIR}/common1V1997.mdb")
+    set_tests_properties(jet3_read PROPERTIES SKIP_RETURN_CODE 77)
+endif()
