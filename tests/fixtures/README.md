@@ -58,11 +58,14 @@ Both generators need the fixed Jackcess 5.2.0 JAR (`$JACKCESS_JAR`) and a JDK:
 ```sh
 javac -cp "$JACKCESS_JAR" -d "${TMPDIR:-/tmp}/rj-fixtures" tools/validation/JackcessJet4DataFixture.java
 javac -cp "$JACKCESS_JAR" -d "${TMPDIR:-/tmp}/rj-fixtures" tools/validation/JackcessJet4IndexFixture.java
+javac -cp "$JACKCESS_JAR" -d "${TMPDIR:-/tmp}/rj-fixtures" tools/validation/JackcessAceFixture.java
 mkdir -p build/fixtures
 java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessJet4DataFixture build/fixtures/jet4-data-v2000.mdb V2000
 java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessJet4DataFixture build/fixtures/jet4-data-v2003.mdb V2003
 java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessJet4IndexFixture build/fixtures/jet4-index-v2000.mdb V2000
 java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessJet4IndexFixture build/fixtures/jet4-index-v2003.mdb V2003
+java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessAceFixture build/fixtures/ace-v2016.accdb V2016
+java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessAceFixture build/fixtures/ace-v2019.accdb V2019
 ```
 
 Each generator prints the fixed-JAR reading of the file it just wrote, so the values can be
@@ -124,6 +127,24 @@ full OLE payload, and assert the file bytes stay unchanged.
 
 Jackcess stores a NULL key part as an index entry rather than skipping it, and it rejects a second
 fully-NULL key as a duplicate of the first, so the fixture keeps only one NULL per key position.
+
+### ACE V2016 and extra V2019
+
+[`JackcessAceFixture.java`](../../tools/validation/JackcessAceFixture.java) writes
+`ace-v2016.accdb` and `ace-v2019.accdb`. The committed ACE fixtures stop at V2010 plus the
+single-table V2019 extended-date resource, so V2016 had no sample at all.
+
+`V2016Data` holds `Id`, `Flag`, `Name` (TEXT 30 units), `Amount` (MONEY), `Created`
+(SHORT_DATE_TIME), `Ref` (GUID), `Memo`, and `Payload` (OLE) with three rows: a fully populated row
+whose MEMO passes 5000 characters, an all-NULL row, and a row with empty TEXT, MEMO, and OLE
+payloads. `V2019Data` holds `Id`, `Stamp` (EXT_DATE_TIME), and `Note` with six rows: NULL,
+`2020-01-02 03:04:05.123456789` (stored as 100 ns ticks, so it reads back as `123456700`), the years
+100, 1265, and 1765, and the pre-epoch `1899-12-29 18:30`.
+
+`ace_extra_read_v2016` / `ace_extra_read_v2019` assert the schema, every row value, and that the
+file bytes are unchanged after the read-only open. Both also read the system table `MSysResources`
+and require its `Data` column to expose the stored complex-value foreign key as a LONG, which is
+what Jackcess returns for that column.
 
 ## ACE complex-column read fixtures
 

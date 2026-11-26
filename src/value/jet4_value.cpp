@@ -714,6 +714,23 @@ Jet4Value decode_jet4_value(const PageFile& file,
                 value_error(file, table_name, row, column, "GUID value has an invalid byte length");
             }
             return GuidValue{guid_text(bytes)};
+        case complex_type: {
+            // A complex column stores a 4-byte foreign key into its flat table. Jackcess exposes
+            // it as a ComplexValueForeignKey even when the catalog link is unresolved, as with
+            // MSysResources.Data, so read the number instead of falling back to raw bytes.
+            if (bytes.empty()) {
+                return std::monostate{};
+            }
+            if (bytes.size() != 4) {
+                value_error(file, table_name, row, column,
+                            "Complex value foreign key has an invalid byte length");
+            }
+            const std::uint32_t bits = read_u32(bytes, 0);
+            if (bits <= static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())) {
+                return static_cast<std::int32_t>(bits);
+            }
+            return static_cast<std::int32_t>(-1 - static_cast<std::int64_t>(~bits));
+        }
         default:
             return UnsupportedValue{"unsupported MDB type " + std::to_string(value_type), bytes};
     }

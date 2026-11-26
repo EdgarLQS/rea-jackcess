@@ -122,6 +122,9 @@ std::optional<std::string_view> canonical_type(std::uint8_t mdb_type) {
             return "guid";
         case 0x10:
             return "numeric";
+        case 0x12:
+            // A complex column stores a 4-byte foreign key into its flat table.
+            return "complex";
         case 0x13:
             return "int64";
         default:

@@ -174,3 +174,14 @@ foreach(jet4_index_fixture v2000 v2003)
                 "${REA_JACKCESS_FIXTURE_DIR}/jet4-index-${jet4_index_fixture}.mdb")
     set_tests_properties(jet4_index_read_${jet4_index_fixture} PROPERTIES SKIP_RETURN_CODE 77)
 endforeach()
+
+# ACE V2016 and the extra V2019 sample follow the same generated-on-demand rule.
+add_executable(rea_jackcess_ace_extra_read_tests ace_extra_read_test.cpp)
+target_link_libraries(rea_jackcess_ace_extra_read_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_ace_extra_read_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+foreach(ace_extra_version v2016 v2019)
+    add_test(NAME ace_extra_read_${ace_extra_version}
+        COMMAND rea_jackcess_ace_extra_read_tests
+                "${REA_JACKCESS_FIXTURE_DIR}/ace-${ace_extra_version}.accdb" ${ace_extra_version})
+    set_tests_properties(ace_extra_read_${ace_extra_version} PROPERTIES SKIP_RETURN_CODE 77)
+endforeach()
