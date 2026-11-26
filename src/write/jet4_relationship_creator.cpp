@@ -302,7 +302,13 @@ DefinitionWrite definition_with_added_indexes(const PageFile& file,
         rebuilt.insert(rebuilt.end(), name_entry.begin(), name_entry.end());
     }
     rebuilt.insert(rebuilt.end(), stream.begin() + names_end, stream.begin() + definition_size);
-    rebuilt.insert(rebuilt.end(), stream.begin() + new_definition_size, stream.end());
+    // Keep whatever followed the old definition on its last page. When the enlarged definition
+    // reaches or passes the end of the collected pages there is no tail left to copy, and
+    // stream.begin() + new_definition_size would be out of range.
+    const std::size_t tail_start =
+        new_definition_size < stream.size() ? static_cast<std::size_t>(new_definition_size)
+                                            : stream.size();
+    rebuilt.insert(rebuilt.end(), stream.begin() + static_cast<std::ptrdiff_t>(tail_start), stream.end());
 
     write_u32(rebuilt, definition_size_offset, new_definition_size);
     write_u32(rebuilt, logical_index_count_offset,
