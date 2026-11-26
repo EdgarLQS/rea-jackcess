@@ -142,6 +142,10 @@ public:
     // Read-write handles hold an exclusive advisory lock until all dependent handles are closed.
     static Database open(const std::filesystem::path& path, DatabaseOpenMode mode);
 
+    // Opens a database whose bytes already live in memory. The buffer must contain the whole
+    // file; the handle is read-only and reports "<memory>" as its path in diagnostics.
+    static Database open(const std::vector<std::uint8_t>& bytes);
+
     // Creates a Jet4 database, then opens it for reading.
     // Replacing an existing file fails while it has an active read-write handle.
     // Concurrent calls to either create overload targeting the same path must be serialized by the caller.

@@ -1912,6 +1912,15 @@ Database Database::open(const std::filesystem::path& path, DatabaseOpenMode mode
                                                             std::move(write_lock)));
 }
 
+Database Database::open(const std::vector<std::uint8_t>& bytes) {
+    auto file = detail::PageFile::open(bytes);
+    auto schema = detail::read_table_schema_catalog(file);
+    return Database(std::make_shared<detail::DatabaseState>(std::move(file),
+                                                            std::move(schema),
+                                                            false,
+                                                            std::nullopt));
+}
+
 Database Database::create(const std::filesystem::path& path, DatabaseFormat format) {
     return create(path, format, {});
 }

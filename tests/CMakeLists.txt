@@ -264,3 +264,12 @@ if(EXISTS "${REA_JACKCESS_JET3_DIR}/queryV1997.mdb")
         COMMAND rea_jackcess_jet3_query_tests "${REA_JACKCESS_JET3_DIR}/queryV1997.mdb")
     set_tests_properties(jet3_query_read PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+# The same bytes must behave identically when opened from a buffer instead of a file.
+add_executable(rea_jackcess_memory_open_tests memory_open_test.cpp)
+target_link_libraries(rea_jackcess_memory_open_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_memory_open_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME memory_open
+    COMMAND rea_jackcess_memory_open_tests
+            "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/complex-data-v2007.accdb"
+            "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/fk-v2000.mdb")

@@ -19,7 +19,7 @@ Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b2
 | DB-05 | Generic Jet4 既有库打开及修改；创建拒绝 | Database / api，读取和写入边界待分格式核实 | 部分实现 | 未运行 · 独立 Generic Jet4 语料 | W02 |
 | DB-06 | Database 生命周期、自动同步、刷新与打开选项 | Database / api、page，写锁与日志已有，选项对齐待补 | 部分实现 | 通过 · C database_create、crash_recovery_v2000/v2003（写入与恢复切片） | W09 |
 | DB-07 | 默认 codec 拒绝编码页，MSISAM 识别，扩展处理器接入 | DatabaseFile / format、page，识别已有，codec 扩展待实现 | 部分实现 | 通过 · C database_file（识别）；处理器未运行 | W09 |
-| DB-08 | 文件通道和内存打开，字符集、时区及日期模式 | Database / api、page，当前主要按路径打开 | 部分实现 | 未运行 · 通道及选项对照 | W09 |
+| DB-08 | 文件通道和内存打开，字符集、时区及日期模式 | Database::open(bytes) 已支持内存打开（只读）；字符集/时区/日期模式选项待补 / Database、page | 部分实现 | 通过 · C memory_open（ACE 与 Jet4 的内存读结果与按路径打开一致、写入被拒、损坏缓冲报 `<memory>`） | W09 |
 
 ## 表结构、行与游标
 

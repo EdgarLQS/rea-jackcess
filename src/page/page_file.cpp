@@ -2,6 +2,7 @@
 
 #include "../format/jet_format.hpp"
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <system_error>
@@ -19,6 +20,14 @@ PageFile::PageFile(std::filesystem::path path,
                    FormatInfo format,
                    std::uint64_t file_size)
     : path_(std::move(path)), stream_(std::move(stream)), format_(format), file_size_(file_size) {}
+
+PageFile::PageFile(std::filesystem::path path,
+                   std::vector<std::uint8_t> bytes,
+                   FormatInfo format)
+    : path_(std::move(path)),
+      format_(format),
+      file_size_(bytes.size()),
+      memory_(std::make_shared<const std::vector<std::uint8_t>>(std::move(bytes))) {}
 
 PageFile PageFile::open(const std::filesystem::path& path) {
     std::error_code filesystem_error;
@@ -51,11 +60,31 @@ PageFile PageFile::open(const std::filesystem::path& path) {
     return PageFile(path, std::move(stream), format, file_size);
 }
 
+PageFile PageFile::open(std::vector<std::uint8_t> bytes, std::string memory_name) {
+    const std::filesystem::path name(std::move(memory_name));
+    if (bytes.size() < header_size) {
+        throw DatabaseError(DatabaseErrorCode::truncated_file,
+                            "In-memory database is shorter than its header",
+                            name);
+    }
+
+    std::array<std::uint8_t, database_header_size> header{};
+    std::copy_n(bytes.begin(), header.size(), header.begin());
+    const FormatInfo format = detect_format(header, name);
+    if (bytes.size() < format.page_size || bytes.size() % format.page_size != 0) {
+        throw DatabaseError(DatabaseErrorCode::corrupted_file,
+                            "In-memory database size is not aligned to its page size",
+                            name);
+    }
+    return PageFile(name, std::move(bytes), format);
+}
+
 PageFile::PageFile(PageFile&& other)
     : path_(std::move(other.path_)),
       stream_(std::move(other.stream_)),
       format_(other.format_),
-      file_size_(other.file_size_) {}
+      file_size_(other.file_size_),
+      memory_(std::move(other.memory_)) {}
 
 PageFile& PageFile::operator=(PageFile&& other) {
     if (this == &other) {
@@ -67,6 +96,7 @@ PageFile& PageFile::operator=(PageFile&& other) {
     stream_ = std::move(other.stream_);
     format_ = other.format_;
     file_size_ = other.file_size_;
+    memory_ = std::move(other.memory_);
     return *this;
 }
 
@@ -89,6 +119,10 @@ std::vector<std::uint8_t> PageFile::read_page(std::uint64_t page_number) const {
     }
 
     const std::uint64_t offset = page_number * format_.page_size;
+    if (memory_) {
+        const auto begin = memory_->begin() + static_cast<std::ptrdiff_t>(offset);
+        return {begin, begin + static_cast<std::ptrdiff_t>(format_.page_size)};
+    }
     if (offset > static_cast<std::uint64_t>(std::numeric_limits<std::streamoff>::max())) {
         throw DatabaseError(DatabaseErrorCode::page_out_of_range,
                             "Database page offset exceeds stream limits", path_, page_number);
