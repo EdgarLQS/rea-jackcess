@@ -1,7 +1,7 @@
 #include "database_internal.hpp"
 
 #include "catalog/system_catalog.hpp"
-#include "value/jet4_value.hpp"
+#include "value/value_decode.hpp"
 
 #include <algorithm>
 #include <array>
@@ -332,7 +332,7 @@ const QueryRowInfo* cross_tab_column(const QueryInfo& query, bool pivot) {
 template <class T>
 std::optional<T> read_field(const detail::PageFile& file, const detail::EncodedTableRow& row,
                             const detail::ColumnDefinition& column) {
-    auto value = detail::decode_jet4_value(file, "MSysQueries", row, column);
+    auto value = detail::decode_value(file, "MSysQueries", row, column);
     if (const auto* result = std::get_if<T>(&value)) {
         return *result;
     }
@@ -505,7 +505,14 @@ std::vector<QueryInfo> Database::queries() const {
     const auto& attribute = column("Attribute");
     const auto& expression = column("Expression");
     const auto& flag = column("Flag");
-    const auto& extra = column("LvExtra");
+    // Jet3 has no LvExtra column; the extra value then stays empty.
+    const auto* extra = [&]() -> const detail::ColumnDefinition* {
+        const auto& columns = table->definition.columns;
+        const auto found = std::find_if(columns.begin(), columns.end(), [](const auto& item) {
+            return item.name == "LvExtra";
+        });
+        return found == columns.end() ? nullptr : &*found;
+    }();
     const auto& name1 = column("Name1");
     const auto& name2 = column("Name2");
     const auto& order = column("Order");
@@ -523,7 +530,7 @@ std::vector<QueryInfo> Database::queries() const {
             attribute_value ? std::optional<std::uint8_t>(static_cast<std::uint8_t>(*attribute_value)) : std::nullopt,
             read_field<std::string>(file, *row, expression),
             read_field<std::int16_t>(file, *row, flag),
-            read_field<std::int32_t>(file, *row, extra),
+            extra ? read_field<std::int32_t>(file, *row, *extra) : std::nullopt,
             read_field<std::string>(file, *row, name1),
             read_field<std::string>(file, *row, name2),
             order_value ? std::optional<std::vector<std::uint8_t>>(std::move(order_value->bytes)) : std::nullopt,

@@ -255,3 +255,12 @@ if(EXISTS "${REA_JACKCESS_JET3_DIR}/indexV1997.mdb")
         COMMAND rea_jackcess_jet3_index_tests "${REA_JACKCESS_JET3_DIR}/indexV1997.mdb")
     set_tests_properties(jet3_index_read PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+if(EXISTS "${REA_JACKCESS_JET3_DIR}/queryV1997.mdb")
+    add_executable(rea_jackcess_jet3_query_tests jet3_query_read_test.cpp)
+    target_link_libraries(rea_jackcess_jet3_query_tests PRIVATE rea_jackcess::core)
+    target_include_directories(rea_jackcess_jet3_query_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME jet3_query_read
+        COMMAND rea_jackcess_jet3_query_tests "${REA_JACKCESS_JET3_DIR}/queryV1997.mdb")
+    set_tests_properties(jet3_query_read PROPERTIES SKIP_RETURN_CODE 77)
+endif()
