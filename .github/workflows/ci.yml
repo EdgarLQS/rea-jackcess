@@ -2,13 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [only-read, main]
+    branches: ['**']
   pull_request:
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   linux-x86_64:
