@@ -296,3 +296,11 @@ endif()
 add_test(NAME perf_read_1gb
     COMMAND rea_jackcess_perf_read_tests 130000 4000)
 set_tests_properties(perf_read_1gb PROPERTIES DISABLED TRUE LABELS "large" TIMEOUT 900)
+
+# MSysObjects hides objects with flag 0x08; the test flips it on a copy of a generated fixture.
+add_executable(rea_jackcess_hidden_table_tests hidden_table_test.cpp)
+target_link_libraries(rea_jackcess_hidden_table_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_hidden_table_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME hidden_table
+    COMMAND rea_jackcess_hidden_table_tests "${REA_JACKCESS_FIXTURE_DIR}/jet4-data-v2000.mdb")
+set_tests_properties(hidden_table PROPERTIES SKIP_RETURN_CODE 77)

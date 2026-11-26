@@ -145,6 +145,17 @@ public final class JackcessJet4IndexFixture {
         addMixedRow(mixed, 3, "US", "memo-a");
         addMixedRow(mixed, 4, "EU", "memo-c" + "y".repeat(400));
         addMixedRow(mixed, 5, null, "memo-z");
+        // The reference implementation must reject a duplicate composite key, which is why the
+        // generated file can never contain one.
+        try {
+            addMixedRow(mixed, 6, "EU", "memo-b");
+            throw new IllegalStateException("duplicate composite key was accepted");
+        } catch (Exception expected) {
+            if ("duplicate composite key was accepted".equals(expected.getMessage())) {
+                throw expected;
+            }
+            System.out.println("duplicate composite key rejected as expected");
+        }
     }
 
     private static String hex(byte[] bytes) {

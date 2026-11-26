@@ -15,6 +15,8 @@ struct ReadableTableSchema {
     std::string object_type;
     bool is_user_table;
     bool is_linked;
+    // MSysObjects carries a hidden flag (0x08) for objects Access hides from the UI.
+    bool is_hidden = false;
     TableDefinition definition;
 };
 

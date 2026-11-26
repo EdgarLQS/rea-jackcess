@@ -147,6 +147,9 @@ prefix, the row keeps the full text, and a NULL tag sorts first.
 | 4 | EU | `memo-c` + 400 `y` | 4 (truncated key) |
 | 5 | NULL | memo-z | 1 (NULL sorts first) |
 
+The generator also attempts to insert a duplicate `(EU, memo-b)` and requires the fixed JAR to
+reject it, which documents why the generated file never contains a unique-key conflict.
+
 `jet4_index_read_v2000` / `jet4_index_read_v2003` compare the composite index order, the reverse
 order, an `EU` prefix scan (both directions), the `[EU/A, US/A)` range, an exact composite lookup,
 the MEMO index order in both directions, the truncated-key row text, the 255-byte BINARY payload,

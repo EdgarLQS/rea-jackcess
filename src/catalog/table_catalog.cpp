@@ -13,6 +13,7 @@ constexpr std::int16_t table_object_type = 1;
 constexpr std::int16_t linked_odbc_object_type = 4;
 constexpr std::int16_t linked_table_object_type = 6;
 constexpr std::uint32_t system_object_flags = 0x80000002u;
+constexpr std::uint32_t hidden_object_flags = 0x08u;
 constexpr std::uint8_t system_table_type = 0x53;
 constexpr std::uint8_t user_table_type = 0x4e;
 
@@ -117,12 +118,15 @@ TableSchemaCatalog read_table_schema_catalog(const PageFile& file) {
             } else if (!is_user_table) {
                 add_error(result, name, "Table definition has an unknown table type", *object.id);
             }
+            const bool is_hidden = object.flags &&
+                                   (static_cast<std::uint32_t>(*object.flags) & hidden_object_flags) != 0;
             result.tables.push_back({
                 name,
                 static_cast<std::uint64_t>(*object.id),
                 std::move(object_type),
                 is_user_table,
                 false,
+                is_hidden,
                 std::move(definition),
             });
         } catch (const DatabaseError& error) {

@@ -189,6 +189,8 @@ public:
     const std::string& object_type() const;
     bool is_user_table() const;
     bool is_linked() const;
+    // True when MSysObjects marks the object hidden (flag 0x08).
+    bool is_hidden() const;
     std::uint32_t row_count_header() const;
     const std::vector<ColumnInfo>& columns() const;
     const std::vector<IndexInfo>& indexes() const;

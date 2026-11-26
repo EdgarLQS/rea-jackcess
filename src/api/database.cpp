@@ -1386,6 +1386,11 @@ bool Table::is_user_table() const {
     return state.database->schema.tables[state.schema_index].is_user_table;
 }
 
+bool Table::is_hidden() const {
+    const auto& state = checked_state(state_);
+    return state.database->schema.tables[state.schema_index].is_hidden;
+}
+
 bool Table::is_linked() const {
     const auto& state = checked_state(state_);
     return state.database->schema.tables[state.schema_index].is_linked;

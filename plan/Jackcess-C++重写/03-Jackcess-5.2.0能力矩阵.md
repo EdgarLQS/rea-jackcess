@@ -29,7 +29,7 @@ Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b2
 | TB-02 | TableBuilder 创建 V2000 支持类型的空表及跨页表定义 | Database::create、TableBuilder / write | 已完成 | 通过 · C database_create（多页定义） | W02 |
 | TB-03 | TableBuilder 创建 V2003 已覆盖类型的空表；既有跨页定义可修改 | 同 TB-02 | 已完成 | 通过 · C database_create（V2003）、multipage_definition_v2003（后续改定义） | W02 |
 | TB-04 | TableUpdater、列类型和标识符规则 | TableBuilder、Table::add_index / write；加列及更广标识符规则待补 | 部分实现 | 通过 · C database_create（当前结构写入范围） | W10 |
-| TB-05 | TableMetaData 与系统、隐藏、链接对象分类 | Database::tables、linked_tables / catalog；隐藏与其他对象待核实 | 部分实现 | 通过 · C catalog、real_sample（已覆盖对象） | W10 |
+| TB-05 | TableMetaData 与系统、隐藏、链接对象分类 | Database::tables、Table::is_hidden、linked_tables / catalog | 已完成 | 通过 · C catalog、real_sample、hidden_table（MSysObjects 0x08 翻转后仍列出且标记隐藏） | W10 |
 | RW-01 | Table.addRow/addRows，V2000 支持类型写入并回读 | Table::add_row/add_rows / write | 已完成 | 通过 · C database_create（固定、变长及批量） | W02 |
 | RW-02 | Table.addRow/addRows，V2003 支持类型写入并回读 | 同 RW-01 | 已完成 | 通过 · C database_create（V2003 写入切片） | W02 |
 | RW-03 | Table.updateRow/deleteRow，V2000 已支持表形态的行更新、迁移、删除 | Table::update_row/delete_row / write | 已完成 | 通过 · C database_create（更新、迁移及删除） | W02 |
@@ -48,7 +48,7 @@ Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b2
 | IX-01 | IndexBuilder/IndexCursor，V2000 单列或合成复合键建索引、维护、查找 | Table::add_index、find_row_by_index / index、write | 已完成 | 通过 · C database_create、cursor_v2000（当前键集合）、jet4_data_read_v2000（索引遍历与按键查找） | W02 |
 | IX-02 | 同 IX-01，V2003 | 同 IX-01 | 已完成 | 通过 · C database_create、cursor_v2003（当前键集合）、jet4_data_read_v2003（索引遍历与按键查找） | W02 |
 | IX-03 | 两版单列 TEXT/MEMO 六种已覆盖排序描述符，含截断及升降序 | IndexBuilder、Table::rows_by_index / index、write | 已完成 | 通过 · C database_create（排序与 MEMO）、jet4_index_read（255 单元截断的 MEMO 索引正/反序）；J「MEMO 列索引」 | W02 |
-| IX-04 | 两版复合 TEXT/MEMO 键的一致排序、前缀、唯一约束与特殊空值 | Table::rows_by_index_prefix、add_index / index、write | 部分实现 | 通过 · C jet4_index_read_v2000/v2003（复合 TEXT 与 (TEXT, MEMO) 排序、前缀、区间、精确查找、截断与 NULL 键位置）；写入侧复合键未运行 | W02 |
+| IX-04 | 两版复合 TEXT/MEMO 键的一致排序、前缀、唯一约束与特殊空值 | Table::rows_by_index_prefix、add_index / index | 已完成（读取侧） | 通过 · C jet4_index_read_v2000/v2003（复合 TEXT 与 (TEXT, MEMO) 排序、前缀、区间、精确查找、截断、NULL 键位置、unique 标志与条目数）；生成器探测固定 JAR 拒绝重复键，写入侧强制不在只读范围 | W02 |
 | IX-05 | 两版清空叶页时维护叶链及回收页 | Table::delete_row / write | 已完成 | 通过 · C index_merge_v2000/v2003 | W02 |
 | IX-06 | 删除跨多级节点后的可达性、节点页合并与空间回收 | Table::delete_row / write，仅叶页回收 | 部分实现 | 未运行 · 节点合并 | W02 |
 | IX-07 | 既有索引异常策略及切换选项 | 索引拒绝规则已有；writeBrokenIndex 选项待补 | 部分实现 | 未运行 · 策略对照 | W10 |
