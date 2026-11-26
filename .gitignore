@@ -1,5 +1,7 @@
 .DS_Store
 /build/
-/test_data_only_read
+/test_data_only_read/*
+!/test_data_only_read/README.md
+!/test_data_only_read/test_mdb.mdb
 .workbuddy/
 /build-asan
