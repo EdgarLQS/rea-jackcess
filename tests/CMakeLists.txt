@@ -235,3 +235,14 @@ if(EXISTS "${REA_JACKCESS_JET3_DIR}/common1V1997.mdb")
         COMMAND rea_jackcess_jet3_read_tests "${REA_JACKCESS_JET3_DIR}/common1V1997.mdb")
     set_tests_properties(jet3_read PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+# Jet3 column definitions are parsed from the table-definition pages directly, before the
+# catalog and row stages land.
+if(EXISTS "${REA_JACKCESS_JET3_DIR}/common1V1997.mdb")
+    add_executable(rea_jackcess_jet3_definition_tests jet3_table_definition_test.cpp)
+    target_link_libraries(rea_jackcess_jet3_definition_tests PRIVATE rea_jackcess::core)
+    target_include_directories(rea_jackcess_jet3_definition_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME jet3_table_definition
+        COMMAND rea_jackcess_jet3_definition_tests "${REA_JACKCESS_JET3_DIR}/common1V1997.mdb")
+    set_tests_properties(jet3_table_definition PROPERTIES SKIP_RETURN_CODE 77)
+endif()

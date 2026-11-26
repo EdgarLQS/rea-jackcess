@@ -89,6 +89,7 @@ rea_jackcess_add_package(catalog
     catalog/system_catalog.cpp
     catalog/table_catalog.cpp
     catalog/table_definition.cpp
+    catalog/jet3_table_definition.cpp
     catalog/usage_map.cpp
 )
 
