@@ -83,6 +83,12 @@ add_executable(rea_jackcess_csv_tests csv_test.cpp)
 target_link_libraries(rea_jackcess_csv_tests PRIVATE rea_jackcess::core)
 target_include_directories(rea_jackcess_csv_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 add_test(NAME csv_round_trip COMMAND rea_jackcess_csv_tests)
+add_test(NAME csv_complex_export
+    COMMAND rea_jackcess_csv_tests complex
+            "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/complex-data-v2007.accdb")
+add_test(NAME csv_unsupported_complex_export
+    COMMAND rea_jackcess_csv_tests unsupported-complex
+            "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/unsupported-fields-v2007.accdb")
 
 # SHORT_DATE_TIME is exercised on both Jet4 formats; the test builds its own databases.
 add_executable(rea_jackcess_date_time_tests date_time_test.cpp)
