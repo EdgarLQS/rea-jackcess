@@ -90,7 +90,7 @@ Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b2
 | ID | Jackcess 公开行为与格式 | REA 接口与位置 | 实现 | 验证与证据 | 工作包 |
 |---|---|---|---|---|---|
 | QU-01 | Database.getQueries / Query.toSQLString，V2000/V2003 固定样本 SQL 重建 | Database::queries、QueryInfo::to_sql / api | 已完成 | 通过 · C saved_query_v2000/v2003；J「保存查询的 SQL 重建」 | W10 |
-| IO-01 | ImportUtil/ExportUtil 普通表 CSV，含日期文本切片；复杂列导出其外键文本 | CSV 接口 / io | 部分实现 | 通过 · C `csv_round_trip`、`csv_complex_export`（多值/附件/版本历史以十进制外键输出并过滤，逐字匹配固定 5.2.0 JAR）、`csv_unsupported_complex_export`（未知复杂类型输出外键、未知标量明确拒绝；`b2e6b1e`）；暂无 NULL 复杂外键样本 | W10 |
+| IO-01 | ImportUtil/ExportUtil 普通表 CSV，含日期文本切片；复杂列导出其外键文本 | CSV 接口 / io；CLI `export`/`import` | 部分实现 | 通过 · C `csv_round_trip`、`csv_complex_export`（多值/附件/版本历史以十进制外键输出并过滤，逐字匹配固定 5.2.0 JAR）、`csv_unsupported_complex_export`（未知复杂类型输出外键、未知标量明确拒绝；`b2e6b1e`）、`cli_csv_export`（`--header` 生效、未知选项退出码 2）；CLI 全表导出与固定 JAR `ExportUtil` 在 V2007/V2010 样本上逐字一致；暂无 NULL 复杂外键样本 | W10 |
 | EX-01 | ErrorHandler、ColumnValidator、ColumnMatcher 扩展点 | Database、Table、RowCursor / api；错误码与上下文映射见[错误分类](14-只读错误分类与上下文.md) | 部分实现 | 通过 · C database_create、cursor_v2000/v2003、error_context（七类码的可依赖字段与表/列上下文）；复杂值匹配的自定义异常仍原样透传 | W10 |
 
 **额外能力判定。** Jackcess 5.2.0 的 `Database::getQueries` 和 `Query::toSQLString` 提供查询定义及 SQL 文本。通用 SQL 执行属于额外能力，单独决策；PR-04 的表达式求值保留在核心对齐范围。

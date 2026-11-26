@@ -79,6 +79,15 @@ foreach(query_fixture v2000 v2003)
                 "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/query-${query_fixture}.mdb")
 endforeach()
 
+# The CLI export contract, including the optional --header flag after the file argument.
+add_executable(rea_jackcess_cli_csv_tests cli_csv_test.cpp)
+target_link_libraries(rea_jackcess_cli_csv_tests PRIVATE rea_jackcess::core)
+add_test(NAME cli_csv_export
+    COMMAND rea_jackcess_cli_csv_tests
+            "$<TARGET_FILE:rea_jackcess_cli>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/complex-data-v2007.accdb")
+set_tests_properties(cli_csv_export PROPERTIES SKIP_RETURN_CODE 77)
+
 # The read-side error taxonomy and its context fields are a caller-visible contract.
 add_executable(rea_jackcess_error_context_tests error_context_test.cpp)
 target_link_libraries(rea_jackcess_error_context_tests PRIVATE rea_jackcess::core)

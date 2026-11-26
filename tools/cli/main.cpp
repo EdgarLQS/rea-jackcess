@@ -205,11 +205,11 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if ((argc == 6 || argc == 7) && (option == "export" || option == "import")) {
+    if ((argc == 5 || argc == 6) && (option == "export" || option == "import")) {
         rea_jackcess::CsvOptions options;
-        if (argc == 7) {
-            if (std::string_view(argv[6]) != "--header") {
-                std::cerr << "Unknown export/import option: " << argv[6] << '\n';
+        if (argc == 6) {
+            if (std::string_view(argv[5]) != "--header") {
+                std::cerr << "Unknown export/import option: " << argv[5] << '\n';
                 return 2;
             }
             options.header = true;

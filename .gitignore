@@ -6,3 +6,5 @@
 .workbuddy/
 /build-asan
 /build-sanitizers/
+/build-release/
+/build-gcc/
