@@ -168,6 +168,11 @@ add_executable(rea_jackcess_pgeo_tests pgeo_layer_reader_test.cpp)
 target_link_libraries(rea_jackcess_pgeo_tests PRIVATE rea_jackcess::pgeo)
 target_include_directories(rea_jackcess_pgeo_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 add_test(NAME pgeo_layer_reader COMMAND rea_jackcess_pgeo_tests)
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME pgeo_layer_dump_compare_unit
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/validation/test_compare_pgeo_layer_dump.py")
+endif()
 if(EXISTS "${REA_JACKCESS_PGEO_SAMPLE}")
     add_test(NAME pgeo_sample_read
         COMMAND rea_jackcess_pgeo_tests sample "${REA_JACKCESS_PGEO_SAMPLE}")
