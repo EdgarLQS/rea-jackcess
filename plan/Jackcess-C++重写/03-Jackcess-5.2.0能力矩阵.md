@@ -15,7 +15,7 @@ Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b2
 | DB-01 | DatabaseBuilder 识别 Jet3、Jet4、ACE、MSISAM 格式头 | DatabaseFile / format | 已完成 | 通过 · C database_file（头识别） | W02 |
 | DB-02 | DatabaseBuilder.create，V2000 空库可重开 | Database::create / write | 已完成 | 通过 · C cli_create_v2000、database_create | W02 |
 | DB-03 | DatabaseBuilder.create，V2003 空库可重开 | 同 DB-02 | 已完成 | 通过 · C cli_create_v2003、database_create | W02 |
-| DB-04 | DatabaseBuilder.open，Jet3 只读数据访问 | 目录、表定义与行读取已实现；索引与查询待补 / format、catalog、value | 部分实现 | 通过 · C jet3_read（10 张表与 Table1 全部行值）、jet3_table_definition（9/17/89 列，含续页）；5 份样本与固定 JAR 全表一致 | W08 |
+| DB-04 | DatabaseBuilder.open，Jet3 只读数据访问 | 目录、表定义、行与索引读取已实现；保存查询待补 / format、catalog、value、index | 部分实现 | 通过 · C jet3_read、jet3_table_definition、jet3_index_read（索引名/根页/正反序与按键查找）；6 份样本与固定 JAR 一致 | W08 |
 | DB-05 | Generic Jet4 既有库打开及修改；创建拒绝 | Database / api，读取和写入边界待分格式核实 | 部分实现 | 未运行 · 独立 Generic Jet4 语料 | W02 |
 | DB-06 | Database 生命周期、自动同步、刷新与打开选项 | Database / api、page，写锁与日志已有，选项对齐待补 | 部分实现 | 通过 · C database_create、crash_recovery_v2000/v2003（写入与恢复切片） | W09 |
 | DB-07 | 默认 codec 拒绝编码页，MSISAM 识别，扩展处理器接入 | DatabaseFile / format、page，识别已有，codec 扩展待实现 | 部分实现 | 通过 · C database_file（识别）；处理器未运行 | W09 |

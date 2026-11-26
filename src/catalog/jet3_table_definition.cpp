@@ -21,12 +21,18 @@ constexpr std::uint64_t table_type_offset = 20;
 constexpr std::uint64_t maximum_column_count_offset = 21;
 constexpr std::uint64_t variable_column_count_offset = 23;
 constexpr std::uint64_t column_count_offset = 25;
+constexpr std::uint64_t logical_index_count_offset = 27;
 constexpr std::uint64_t index_count_offset = 31;
 constexpr std::uint64_t owned_pages_offset = 35;
 constexpr std::uint64_t free_space_pages_offset = 39;
 constexpr std::uint64_t index_definition_offset = 43;
 constexpr std::uint64_t index_definition_size = 8;
 constexpr std::uint64_t column_header_size = 18;
+constexpr std::uint64_t physical_index_block_size = 39;
+constexpr std::uint64_t logical_index_block_size = 20;
+constexpr std::uint16_t maximum_index_columns = 10;
+constexpr std::uint16_t unused_index_column = 0xffff;
+constexpr std::uint8_t ascending_column_flag = 0x01;
 constexpr std::uint64_t trailer_size = 2;
 constexpr std::uint16_t maximum_columns_per_table = 255;
 constexpr std::uint32_t maximum_indexes_per_table = 32;
@@ -138,9 +144,8 @@ TableDefinition read_jet3_table_definition(const PageFile& file, std::uint64_t p
     definition.maximum_column_count = u16(first_page, maximum_column_count_offset);
     definition.variable_column_count = u16(first_page, variable_column_count_offset);
     definition.column_count = u16(first_page, column_count_offset);
-    // Index definitions move to a later stage, so the counts stay at zero and no index is listed.
-    definition.logical_index_count = 0;
-    definition.physical_index_count = 0;
+    definition.logical_index_count = u32(first_page, logical_index_count_offset);
+    definition.physical_index_count = u32(first_page, index_count_offset);
     definition.continuation_page_count = buffer.continuation_pages();
     definition.owned_pages = {first_page[owned_pages_offset],
                               static_cast<std::uint32_t>(first_page[owned_pages_offset + 1]) |
@@ -199,7 +204,76 @@ TableDefinition read_jet3_table_definition(const PageFile& file, std::uint64_t p
         definition.columns.push_back(std::move(column));
     }
 
-    if (name_cursor + trailer_size > buffer.size()) {
+    if (definition.logical_index_count > maximum_indexes_per_table ||
+        definition.physical_index_count > definition.logical_index_count) {
+        corrupted(file, page_number, "Jet3 table definition has inconsistent index counts");
+    }
+
+    // Physical index blocks: 10 column triples, a four-byte usage map, the root page, and flags.
+    std::uint64_t index_cursor = name_cursor;
+    definition.physical_indexes.reserve(definition.physical_index_count);
+    for (std::uint32_t index = 0; index < definition.physical_index_count; ++index) {
+        const auto block = buffer.read(index_cursor, physical_index_block_size);
+        PhysicalIndexDefinition physical;
+        for (std::uint16_t slot = 0; slot < maximum_index_columns; ++slot) {
+            const std::uint64_t offset = static_cast<std::uint64_t>(slot) * 3;
+            const std::uint16_t column_number = u16(block, offset);
+            const std::uint8_t column_flags = block[offset + 2];
+            if (column_number == unused_index_column) {
+                continue;
+            }
+            const bool known = std::any_of(definition.columns.begin(), definition.columns.end(),
+                                           [&](const auto& column) {
+                                               return column.column_number == column_number;
+                                           });
+            if (!known) {
+                corrupted(file, page_number, "Jet3 index references an undefined column number");
+            }
+            physical.columns.push_back({column_number, (column_flags & ascending_column_flag) != 0});
+        }
+        const std::uint64_t usage_map_offset = static_cast<std::uint64_t>(maximum_index_columns) * 3;
+        physical.owned_pages = {block[usage_map_offset],
+                                static_cast<std::uint32_t>(block[usage_map_offset + 1]) |
+                                    (static_cast<std::uint32_t>(block[usage_map_offset + 2]) << 8) |
+                                    (static_cast<std::uint32_t>(block[usage_map_offset + 3]) << 16)};
+        physical.root_page_number = u32(block, usage_map_offset + 4);
+        physical.flags = block[usage_map_offset + 8];
+        physical.extended_flags = 0;
+        definition.physical_indexes.push_back(std::move(physical));
+        index_cursor += physical_index_block_size;
+    }
+
+    // Logical index blocks: two numbers, the foreign-key reference, and cascade flags.
+    std::vector<std::string> index_names;
+    index_names.reserve(definition.logical_index_count);
+    for (std::uint32_t index = 0; index < definition.logical_index_count; ++index) {
+        const auto block = buffer.read(index_cursor, logical_index_block_size);
+        LogicalIndexDefinition logical;
+        logical.index_number = u32(block, 0);
+        logical.index_data_number = u32(block, 4);
+        logical.referenced_index_type = block[8];
+        logical.referenced_index_number = static_cast<std::int32_t>(u32(block, 9));
+        logical.referenced_table_page_number = u32(block, 13);
+        logical.cascade_updates_flags = block[17];
+        logical.cascade_deletes_flags = block[18];
+        logical.type = block[19];
+        definition.indexes.push_back(std::move(logical));
+        index_cursor += logical_index_block_size;
+    }
+    // Names follow all logical blocks, mirroring TableImpl.readIndexDefinitions.
+    for (auto& logical : definition.indexes) {
+        const auto length_bytes = buffer.read(index_cursor, 1);
+        const std::uint8_t name_length = length_bytes[0];
+        ++index_cursor;
+        if (name_length == 0 || name_length > maximum_name_bytes) {
+            corrupted(file, page_number, "Jet3 index name has an invalid length");
+        }
+        const auto name_bytes = buffer.read(index_cursor, name_length);
+        index_cursor += name_length;
+        logical.name = decode_code_page_text(name_bytes);
+    }
+
+    if (index_cursor + trailer_size > buffer.size()) {
         corrupted(file, page_number, "Jet3 table definition trailer is truncated");
     }
     return definition;
