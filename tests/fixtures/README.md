@@ -161,6 +161,31 @@ file bytes are unchanged after the read-only open. Both also read the system tab
 and require its `Data` column to expose the stored complex-value foreign key as a LONG, which is
 what Jackcess returns for that column.
 
+## Real sample comparison tools
+
+`test_data_only_read/test_mdb.mdb` is a real 1.5 MB Jet4 PGeo database with 43 user tables (Chinese
+names, spatial `SHAPE` BLOBs, `GDB_*` catalog tables) and 4 system tables. It stays outside version
+control; `real_sample` only registers when a local copy exists and pins its SHA-256
+`0bc0acb9c732de1e17c43c2d0a6019f7b5a62ccf83c5818a1bc42db7dbc460c6`.
+
+The full schema and row comparison against the fixed Jackcess 5.2.0 JAR uses two committed tools:
+
+```sh
+# C++ side
+build/rea-jackcess canonical test_data_only_read/test_mdb.mdb > /tmp/cpp.json
+
+# Fixed JAR side
+javac -cp "$JACKCESS_JAR" -d /tmp tools/validation/JackcessTableDump.java
+java -cp "/tmp:$JACKCESS_JAR" JackcessTableDump test_data_only_read/test_mdb.mdb /tmp/java.json
+
+python3 -I tools/validation/compare_table_dump.py /tmp/cpp.json /tmp/java.json
+```
+
+The comparer treats tables as row multisets and normalises formatting-only differences: decimals
+compare numerically, dates by calendar fields, GUIDs without braces or case, BLOBs by length and
+SHA-256, floats with a small relative tolerance. It exits 0 only when every table, column, and
+value matches. On 2026-11-26 the run reported `Compared 47 tables: schema and rows match.`
+
 ## ACE complex-column read fixtures
 
 `complex-data-v2007.accdb`, `complex-data-v2010.accdb` and `unsupported-fields-v2007.accdb` are the
