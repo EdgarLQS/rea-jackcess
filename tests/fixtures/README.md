@@ -118,12 +118,27 @@ The nine rows and the fixed-JAR index order are:
 | 10 | EU | AA | 5 (`A` sorts before `AA`) |
 
 The insertion order deliberately differs from the key order, so an index scan cannot match by
-accident on physical order. `LongValues` holds one row with a 9000-byte OLE payload that spans
-several data pages.
+accident on physical order.
 
-`jet4_index_read_v2000` / `jet4_index_read_v2003` compare the index order, the reverse order, an
-`EU` prefix scan (both directions), the `[EU/A, US/A)` range, an exact composite lookup, and the
-full OLE payload, and assert the file bytes stay unchanged.
+`LongValues` holds one row with a 9000-byte OLE payload that spans several data pages plus a
+`BinMax` BINARY column filled to its 255-byte maximum.
+
+`MemoKeys` carries a non-unique single-column MEMO index `MemoKeyIdx` over `(MemoKey)`. The key is
+truncated to 255 UTF-16 units, so row 4 is a 606-character memo whose index entry only covers the
+prefix, while the row itself must still read all 606 characters. NULL sorts first:
+
+| Id | MemoKey | Index position | BinMax |
+|---|---|---|---|
+| 1 | memo-b | 3 | 255 bytes |
+| 2 | memo-a | 2 | 255 bytes |
+| 3 | memo-c | 4 | 255 bytes |
+| 4 | `memo-d` + 600 `x` | 5 (truncated key) | 255 bytes |
+| 5 | NULL | 1 (NULL sorts first) | empty |
+
+`jet4_index_read_v2000` / `jet4_index_read_v2003` compare the composite index order, the reverse
+order, an `EU` prefix scan (both directions), the `[EU/A, US/A)` range, an exact composite lookup,
+the MEMO index order in both directions, the truncated-key row text, the 255-byte BINARY payload,
+the full OLE payload, and assert the file bytes stay unchanged.
 
 Jackcess stores a NULL key part as an index entry rather than skipping it, and it rejects a second
 fully-NULL key as a duplicate of the first, so the fixture keeps only one NULL per key position.

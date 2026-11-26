@@ -110,6 +110,56 @@ void check_long_values(Table table) {
         const auto expected = static_cast<std::uint8_t>((0x40 + index) & 0xffu);
         check(ole->bytes[index] == expected, "OleVal payload differs at byte " + std::to_string(index));
     }
+    // BINARY stops at 255 bytes, so the column holds exactly the maximum payload.
+    const auto* binary = std::get_if<BlobValue>(&row->at(3));
+    check(binary != nullptr, "BinMax must decode as a blob");
+    check(binary->bytes.size() == 255, "BinMax must keep all 255 bytes");
+    for (std::size_t index = 0; index < binary->bytes.size(); ++index) {
+        const auto expected = static_cast<std::uint8_t>((0x10 + index) & 0xffu);
+        check(binary->bytes[index] == expected, "BinMax payload differs at byte " + std::to_string(index));
+    }
+}
+
+// A MEMO key is indexed on its first 255 UTF-16 units, so row 4 is a 606-character memo whose
+// key only covers the truncated prefix. NULL sorts first, as with TEXT keys.
+void check_memo_keys(Table table) {
+    const auto& columns = table.columns();
+    check(columns.size() == 3, "unexpected MemoKeys column count");
+    check(columns[1].name == "MemoKey" && columns[1].type == rea_jackcess::DataType::memo,
+          "MemoKey must be MEMO");
+    check(columns[2].name == "BinMax" && columns[2].type == rea_jackcess::DataType::binary &&
+              columns[2].size == 255,
+          "BinMax must be a 255-byte BINARY column");
+
+    const auto& indexes = table.indexes();
+    check(indexes.size() == 2, "unexpected MemoKeys index count");
+    const auto& memo_index = indexes[1];
+    check(memo_index.name == "MemoKeyIdx" && !memo_index.unique && !memo_index.ignore_nulls,
+          "unexpected MEMO index flags");
+    check(memo_index.columns.size() == 1 && memo_index.columns[0].name == "MemoKey",
+          "unexpected MEMO index columns");
+    check(memo_index.unique_entry_count == 5, "unexpected MEMO index entry count");
+
+    check_ids(collect(table.rows_by_index("MemoKeyIdx")), {5, 2, 1, 3, 4}, "MEMO index scan");
+    check_ids(collect(table.rows_by_index_reverse("MemoKeyIdx")), {4, 3, 1, 2, 5},
+              "MEMO index reverse scan");
+
+    const auto rows = table.rows();
+    std::vector<Row> all;
+    auto cursor = table.rows();
+    while (auto row = cursor.next()) {
+        all.push_back(*row);
+    }
+    check(all.size() == 5, "unexpected MemoKeys row count");
+    const std::vector<std::string> expected = {"memo-b", "memo-a", "memo-c",
+                                               "memo-d" + std::string(600, 'x'), ""};
+    for (std::size_t index = 0; index < 4; ++index) {
+        const auto* memo = std::get_if<rea_jackcess::MemoValue>(&all[index].at(1));
+        check(memo != nullptr, "MemoKeys row " + std::to_string(index + 1) + " has no memo");
+        check(memo->text == expected[index],
+              "MemoKeys row " + std::to_string(index + 1) + " memo text differs");
+    }
+    check(std::holds_alternative<std::monostate>(all[4].at(1)), "MemoKeys row 5 must be NULL");
 }
 
 }  // namespace
@@ -163,6 +213,7 @@ int main(int argc, char** argv) {
 
             Table long_values = get_table(database, "LongValues");
             check_long_values(long_values);
+            check_memo_keys(get_table(database, "MemoKeys"));
         }
         check(read_bytes(fixture) == before, "a read-only open modified the fixture");
         std::cout << "Jet4 composite index read checks passed: " << fixture.filename().string() << '\n';

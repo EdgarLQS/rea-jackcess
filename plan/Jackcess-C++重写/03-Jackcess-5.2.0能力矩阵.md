@@ -47,7 +47,7 @@ Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b2
 |---|---|---|---|---|---|
 | IX-01 | IndexBuilder/IndexCursor，V2000 单列或合成复合键建索引、维护、查找 | Table::add_index、find_row_by_index / index、write | 已完成 | 通过 · C database_create、cursor_v2000（当前键集合）、jet4_data_read_v2000（索引遍历与按键查找） | W02 |
 | IX-02 | 同 IX-01，V2003 | 同 IX-01 | 已完成 | 通过 · C database_create、cursor_v2003（当前键集合）、jet4_data_read_v2003（索引遍历与按键查找） | W02 |
-| IX-03 | 两版单列 TEXT/MEMO 六种已覆盖排序描述符，含截断及升降序 | IndexBuilder、Table::rows_by_index / index、write | 已完成 | 通过 · C database_create（排序与 MEMO）；J「MEMO 列索引」 | W02 |
+| IX-03 | 两版单列 TEXT/MEMO 六种已覆盖排序描述符，含截断及升降序 | IndexBuilder、Table::rows_by_index / index、write | 已完成 | 通过 · C database_create（排序与 MEMO）、jet4_index_read（255 单元截断的 MEMO 索引正/反序）；J「MEMO 列索引」 | W02 |
 | IX-04 | 两版复合 TEXT/MEMO 键的一致排序、前缀、唯一约束与特殊空值 | Table::rows_by_index_prefix、add_index / index、write | 部分实现 | 通过 · C jet4_index_read_v2000/v2003（复合 TEXT 排序、前缀、区间、精确查找与 NULL 键位置）；写入侧复合键与 MEMO 组合未运行 | W02 |
 | IX-05 | 两版清空叶页时维护叶链及回收页 | Table::delete_row / write | 已完成 | 通过 · C index_merge_v2000/v2003 | W02 |
 | IX-06 | 删除跨多级节点后的可达性、节点页合并与空间回收 | Table::delete_row / write，仅叶页回收 | 部分实现 | 未运行 · 节点合并 | W02 |

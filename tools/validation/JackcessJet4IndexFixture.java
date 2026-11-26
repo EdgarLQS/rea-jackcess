@@ -69,8 +69,26 @@ public final class JackcessJet4IndexFixture {
             .addColumn(new ColumnBuilder("Id", DataType.LONG))
             .addColumn(new ColumnBuilder("OleVal", DataType.OLE))
             .addColumn(new ColumnBuilder("MemoVal", DataType.MEMO))
+            .addColumn(new ColumnBuilder("BinMax", DataType.BINARY).withLength(255))
             .withPrimaryKey("Id")
             .toTable(db);
+
+        // A MEMO key is truncated to 255 UTF-16 units for indexing, and BINARY stops at 255 bytes.
+        new TableBuilder("MemoKeys")
+            .addColumn(new ColumnBuilder("Id", DataType.LONG))
+            .addColumn(new ColumnBuilder("MemoKey", DataType.MEMO))
+            .addColumn(new ColumnBuilder("BinMax", DataType.BINARY).withLength(255))
+            .withPrimaryKey("Id")
+            .addIndex(new IndexBuilder("MemoKeyIdx").withColumns("MemoKey"))
+            .toTable(db);
+    }
+
+    private static void addMemoRow(Table table, int id, String memo, byte[] binary) throws Exception {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("Id", id);
+        row.put("MemoKey", memo);
+        row.put("BinMax", binary);
+        table.addRowFromMap(row);
     }
 
     private static void insertRows(Database db) throws Exception {
@@ -94,7 +112,15 @@ public final class JackcessJet4IndexFixture {
         row.put("Id", 1);
         row.put("OleVal", ramp(OLE_LENGTH, 0x40));
         row.put("MemoVal", "ole-page");
+        row.put("BinMax", ramp(255, 0x10));
         db.getTable("LongValues").addRowFromMap(row);
+
+        Table memos = db.getTable("MemoKeys");
+        addMemoRow(memos, 1, "memo-b", ramp(255, 0x20));
+        addMemoRow(memos, 2, "memo-a", ramp(255, 0x30));
+        addMemoRow(memos, 3, "memo-c", ramp(255, 0x40));
+        addMemoRow(memos, 4, "memo-d" + "x".repeat(600), ramp(255, 0x50));
+        addMemoRow(memos, 5, null, new byte[0]);
     }
 
     private static String hex(byte[] bytes) {
@@ -108,7 +134,7 @@ public final class JackcessJet4IndexFixture {
     private static void dump(Path path) throws Exception {
         List<String> lines = new ArrayList<>();
         try (Database db = DatabaseBuilder.open(path.toFile())) {
-            for (String name : List.of("RegionCode", "LongValues")) {
+            for (String name : List.of("RegionCode", "LongValues", "MemoKeys")) {
                 Table table = db.getTable(name);
                 lines.add("table " + name);
                 for (var column : table.getColumns()) {
