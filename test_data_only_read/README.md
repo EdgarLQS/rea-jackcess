@@ -27,7 +27,14 @@ javac -cp "$JACKCESS_JAR" -d /tmp tools/validation/JackcessTableDump.java
 java -cp "/tmp:$JACKCESS_JAR" JackcessTableDump test_data_only_read/test_mdb.mdb /tmp/java.json
 
 python3 -I tools/validation/compare_table_dump.py /tmp/cpp.json /tmp/java.json
+
+python3 tools/validation/compare_pgeo_layer_dump.py /tmp/cpp.json /tmp/java.json \
+  --source test_data_only_read/test_mdb.mdb
 ```
 
-2026-11-26 的结果是 `Compared 47 tables: schema and rows match.`，详见
-[首期只读矩阵与语料盘点](../plan/Jackcess-C++重写/11-首期只读矩阵与语料盘点.md)。
+2026-11-26 的全表对照结果是 `Compared 47 tables: schema and rows match.`。PGeo 专项对照结果是
+`Compared 17 PGeo layers and 30 features by OBJECTID`，图层目录、属性定义和值、SHAPE 长度与 SHA-256
+一致；源文件对照前后 SHA-256 均为
+`0bc0acb9c732de1e17c43c2d0a6019f7b5a62ccf83c5818a1bc42db7dbc460c6`。专用比较器按 OBJECTID 配对核心
+canonical 与固定 JAR 的表行；`pgeo_sample_read` 另逐行验证适配层返回值与核心表行一致。详见
+[首期矩阵与语料盘点](../plan/Jackcess-C++重写/11-首期只读矩阵与语料盘点.md)。
