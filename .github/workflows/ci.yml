@@ -1,0 +1,153 @@
+name: CI
+
+on:
+  push:
+    branches: [only-read, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JACKCESS_VERSION: 5.2.0
+  JACKCESS_SHA256: 9451d6f336cfaa82f5af178d5f6668b933cda4f27e261f29a1faa83630f95775
+  LANG3_SHA256: 7b96bf3ee68949abb5bc465559ac270e0551596fa34523fddf890ec418dde13c
+  COMMONS_LOGGING_SHA256: daddea1ea0be0f56978ab3006b8ac92834afeefbd9b7e4e6316fca57df0fa636
+
+jobs:
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-24.04
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build default-jdk-headless curl python3 ca-certificates
+
+      - name: Fetch the fixed Jackcess JAR and its runtime dependencies
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/jackcess"
+          mkdir -p "$dir"
+          base="https://repo1.maven.org/maven2"
+          curl -fsSL -o "$dir/jackcess-$JACKCESS_VERSION.jar" \
+            "$base/io/github/spannm/jackcess/$JACKCESS_VERSION/jackcess-$JACKCESS_VERSION.jar"
+          curl -fsSL -o "$dir/commons-lang3-3.14.0.jar" \
+            "$base/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar"
+          curl -fsSL -o "$dir/commons-logging-1.2.jar" \
+            "$base/commons-logging/commons-logging/1.2/commons-logging-1.2.jar"
+          echo "$JACKCESS_SHA256  $dir/jackcess-$JACKCESS_VERSION.jar" | sha256sum -c -
+          echo "$LANG3_SHA256  $dir/commons-lang3-3.14.0.jar" | sha256sum -c -
+          echo "$COMMONS_LOGGING_SHA256  $dir/commons-logging-1.2.jar" | sha256sum -c -
+
+      - name: Generate the Jet4 and ACE fixtures
+        run: |
+          set -eu
+          jars="$RUNNER_TEMP/jackcess/*"
+          classes="$RUNNER_TEMP/fixture-classes"
+          mkdir -p "$classes" build/fixtures
+          javac -cp "$jars" -d "$classes" \
+            tools/validation/JackcessJet4DataFixture.java \
+            tools/validation/JackcessJet4IndexFixture.java \
+            tools/validation/JackcessAceFixture.java
+          java -cp "$classes:$jars" JackcessJet4DataFixture build/fixtures/jet4-data-v2000.mdb V2000
+          java -cp "$classes:$jars" JackcessJet4DataFixture build/fixtures/jet4-data-v2003.mdb V2003
+          java -cp "$classes:$jars" JackcessJet4IndexFixture build/fixtures/jet4-index-v2000.mdb V2000
+          java -cp "$classes:$jars" JackcessJet4IndexFixture build/fixtures/jet4-index-v2003.mdb V2003
+          java -cp "$classes:$jars" JackcessAceFixture build/fixtures/ace-v2016.accdb V2016
+          java -cp "$classes:$jars" JackcessAceFixture build/fixtures/ace-v2019.accdb V2019
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DREA_JACKCESS_FIXTURE_DIR="$PWD/build/fixtures"
+
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Upload the test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log-${{ matrix.name }}
+          path: build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+
+  sanitizers:
+    name: sanitizers-linux-x86_64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build default-jdk-headless curl python3 ca-certificates
+
+      - name: Fetch the fixed Jackcess JAR and its runtime dependencies
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/jackcess"
+          mkdir -p "$dir"
+          base="https://repo1.maven.org/maven2"
+          curl -fsSL -o "$dir/jackcess-$JACKCESS_VERSION.jar" \
+            "$base/io/github/spannm/jackcess/$JACKCESS_VERSION/jackcess-$JACKCESS_VERSION.jar"
+          curl -fsSL -o "$dir/commons-lang3-3.14.0.jar" \
+            "$base/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar"
+          curl -fsSL -o "$dir/commons-logging-1.2.jar" \
+            "$base/commons-logging/commons-logging/1.2/commons-logging-1.2.jar"
+          echo "$JACKCESS_SHA256  $dir/jackcess-$JACKCESS_VERSION.jar" | sha256sum -c -
+          echo "$LANG3_SHA256  $dir/commons-lang3-3.14.0.jar" | sha256sum -c -
+          echo "$COMMONS_LOGGING_SHA256  $dir/commons-logging-1.2.jar" | sha256sum -c -
+
+      - name: Generate the Jet4 and ACE fixtures
+        run: |
+          set -eu
+          jars="$RUNNER_TEMP/jackcess/*"
+          classes="$RUNNER_TEMP/fixture-classes"
+          mkdir -p "$classes" build/fixtures
+          javac -cp "$jars" -d "$classes" \
+            tools/validation/JackcessJet4DataFixture.java \
+            tools/validation/JackcessJet4IndexFixture.java \
+            tools/validation/JackcessAceFixture.java
+          java -cp "$classes:$jars" JackcessJet4DataFixture build/fixtures/jet4-data-v2000.mdb V2000
+          java -cp "$classes:$jars" JackcessJet4DataFixture build/fixtures/jet4-data-v2003.mdb V2003
+          java -cp "$classes:$jars" JackcessJet4IndexFixture build/fixtures/jet4-index-v2000.mdb V2000
+          java -cp "$classes:$jars" JackcessJet4IndexFixture build/fixtures/jet4-index-v2003.mdb V2003
+          java -cp "$classes:$jars" JackcessAceFixture build/fixtures/ace-v2016.accdb V2016
+          java -cp "$classes:$jars" JackcessAceFixture build/fixtures/ace-v2019.accdb V2019
+
+      - name: Configure with sanitizers
+        run: |
+          cmake -S . -B build-asan -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined" \
+            -DREA_JACKCESS_FIXTURE_DIR="$PWD/build/fixtures"
+
+      - name: Build with sanitizers
+        run: cmake --build build-asan -j"$(nproc)"
+
+      - name: Test with sanitizers
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --test-dir build-asan --output-on-failure
