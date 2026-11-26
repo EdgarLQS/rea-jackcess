@@ -107,5 +107,5 @@ Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b2
 
 | ID | 交付与边界 | REA 接口与位置 | 实现 | 验证与证据 | 工作包 |
 |---|---|---|---|---|---|
-| PG-01 | 读取 SHAPE、属性、OBJECTID/SRS 并组装图层 | `rea_jackcess::pgeo::Dataset`、`LayerReader` / `adapters/pgeo` | 部分实现 | 通过 · C `pgeo_layer_reader`（合成目录、坏引用、NULL/空 BLOB、缺失 SRS）、`pgeo_sample_read`（固定样本 17 图层/30 要素，适配层逐行与核心表一致）、`compare_pgeo_layer_dump.py`（固定 JAR 按图层/OBJECTID 对照属性定义和值及 SHAPE 长度/SHA-256）；GDAL 几何解码待验 | W13 |
+| PG-01 | 读取 SHAPE、属性、OBJECTID/SRS 并组装图层 | `rea_jackcess::pgeo::Dataset`、`LayerReader` / `adapters/pgeo` | 部分实现 | 通过 · C `pgeo_layer_reader`（合成目录、坏引用、NULL/空 BLOB、缺失 SRS）、`pgeo_sample_read`（固定样本 17 图层/30 要素，完整逐层元数据/属性定义及逐行适配器输出对照核心目录/表）、`compare_pgeo_layer_dump.py`（固定 JAR 按图层/OBJECTID 对照属性定义和值及 SHAPE 长度/SHA-256）；GDAL 几何解码待验 | W13 |
 | PG-02 | 克隆既有样本、保留几何载荷与空间索引关系 | 计划中的 PGeo 适配层 | 未实现 | 未运行 · GDAL/ArcGIS 回读 | W13 |

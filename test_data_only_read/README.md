@@ -36,5 +36,5 @@ python3 tools/validation/compare_pgeo_layer_dump.py /tmp/cpp.json /tmp/java.json
 `Compared 17 PGeo layers and 30 features by OBJECTID`，图层目录、属性定义和值、SHAPE 长度与 SHA-256
 一致；源文件对照前后 SHA-256 均为
 `0bc0acb9c732de1e17c43c2d0a6019f7b5a62ccf83c5818a1bc42db7dbc460c6`。专用比较器按 OBJECTID 配对核心
-canonical 与固定 JAR 的表行；`pgeo_sample_read` 另逐行验证适配层返回值与核心表行一致。详见
+canonical 与固定 JAR 的表行；`pgeo_sample_read` 逐项验证适配层图层目录映射、完整属性定义和逐行返回值与核心目录/表一致。详见
 [首期矩阵与语料盘点](../plan/Jackcess-C++重写/11-首期只读矩阵与语料盘点.md)。

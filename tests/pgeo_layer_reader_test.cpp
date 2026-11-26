@@ -7,8 +7,11 @@
 #include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <map>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -310,6 +313,269 @@ void test_synthetic_feature_read() {
     }
 }
 
+bool ascii_equal_ignore_case(std::string_view left, std::string_view right) {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.size(); ++index) {
+        const auto fold = [](unsigned char character) {
+            return character >= 'A' && character <= 'Z'
+                       ? static_cast<unsigned char>(character + ('a' - 'A'))
+                       : character;
+        };
+        if (fold(static_cast<unsigned char>(left[index])) !=
+            fold(static_cast<unsigned char>(right[index]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string normalized_guid(const Value& value) {
+    const auto* guid = std::get_if<GuidValue>(&value);
+    if (guid == nullptr) {
+        return {};
+    }
+    std::string result;
+    result.reserve(32);
+    for (const char character : guid->text) {
+        if (character == '{' || character == '}' || character == '-') {
+            continue;
+        }
+        const auto byte = static_cast<unsigned char>(character);
+        if (byte >= 'A' && byte <= 'F') {
+            result.push_back(static_cast<char>(byte + ('a' - 'A')));
+        } else if ((byte >= 'a' && byte <= 'f') || (byte >= '0' && byte <= '9')) {
+            result.push_back(static_cast<char>(byte));
+        } else {
+            return {};
+        }
+    }
+    return result.size() == 32 ? result : std::string{};
+}
+
+const std::string& require_text(const Value& value, const std::string& context) {
+    const auto* text = std::get_if<std::string>(&value);
+    check(text != nullptr, context + " is not text");
+    return *text;
+}
+
+std::int32_t require_int32(const Value& value, const std::string& context) {
+    const auto* integer = std::get_if<std::int32_t>(&value);
+    check(integer != nullptr, context + " is not a LONG integer");
+    return *integer;
+}
+
+std::optional<std::int32_t> optional_int32(const Value& value, const std::string& context) {
+    if (std::holds_alternative<std::monostate>(value)) {
+        return std::nullopt;
+    }
+    return require_int32(value, context);
+}
+
+bool require_boolean(const Value& value, const std::string& context) {
+    const auto* boolean = std::get_if<bool>(&value);
+    check(boolean != nullptr, context + " is not BOOLEAN");
+    return *boolean;
+}
+
+std::optional<std::string> optional_text(const Value& value, const std::string& context) {
+    if (std::holds_alternative<std::monostate>(value)) {
+        return std::nullopt;
+    }
+    if (const auto* text = std::get_if<std::string>(&value)) {
+        return *text;
+    }
+    if (const auto* memo = std::get_if<MemoValue>(&value)) {
+        return memo->text;
+    }
+    throw std::runtime_error(context + " is not text or MEMO");
+}
+
+bool same_complex_reference(const std::optional<rea_jackcess::ComplexColumnReference>& left,
+                            const std::optional<rea_jackcess::ComplexColumnReference>& right) {
+    if (left.has_value() != right.has_value()) {
+        return false;
+    }
+    if (!left) {
+        return true;
+    }
+    return left->conceptual_table_page_number == right->conceptual_table_page_number &&
+           left->complex_type_table_page_number == right->complex_type_table_page_number &&
+           left->complex_type_table_name == right->complex_type_table_name &&
+           left->type == right->type &&
+           left->flat_table_page_number == right->flat_table_page_number &&
+           left->flat_table_name == right->flat_table_name &&
+           left->primary_key_column_name == right->primary_key_column_name &&
+           left->foreign_key_column_name == right->foreign_key_column_name;
+}
+
+bool same_column_definition(const rea_jackcess::ColumnInfo& left,
+                            const rea_jackcess::ColumnInfo& right) {
+    return left.name == right.name && left.type == right.type &&
+           left.raw_type_code == right.raw_type_code && left.size == right.size &&
+           left.precision == right.precision && left.scale == right.scale &&
+           left.fixed == right.fixed && left.calculated == right.calculated &&
+           left.nullable == right.nullable && left.complex_type_id == right.complex_type_id &&
+           left.complex_value_foreign_key == right.complex_value_foreign_key &&
+           same_complex_reference(left.complex_column_reference,
+                                  right.complex_column_reference);
+}
+
+struct ExpectedLayer {
+    std::string name;
+    std::string table_name;
+    std::string shape_column;
+    std::string object_id_column;
+    std::int32_t shape_type;
+    std::optional<std::int32_t> spatial_reference_id;
+    bool has_z;
+    bool has_m;
+    bool has_spatial_reference_row;
+    std::optional<std::string> spatial_reference_text;
+};
+
+void assert_sample_layers_match_core_catalogs(const std::vector<Table>& core_tables,
+                                              const Dataset& dataset) {
+    const Table& item_types = require_table(core_tables, "GDB_ItemTypes");
+    const std::size_t type_name_column = column_index(item_types, "Name");
+    const std::size_t type_uuid_column = column_index(item_types, "UUID");
+    auto type_cursor = item_types.rows();
+    std::optional<std::string> feature_class_type;
+    while (const auto row = type_cursor.next()) {
+        if (require_text(row->at(type_name_column), "GDB_ItemTypes.Name") != "Feature Class") {
+            continue;
+        }
+        check(!feature_class_type, "sample has multiple Feature Class type identifiers");
+        feature_class_type = normalized_guid(row->at(type_uuid_column));
+        check(!feature_class_type->empty(), "Feature Class type identifier is not a GUID");
+    }
+    check(feature_class_type.has_value(), "sample has no Feature Class type identifier");
+
+    const Table& items = require_table(core_tables, "GDB_Items");
+    const std::size_t item_type_column = column_index(items, "Type");
+    const std::size_t item_name_column = column_index(items, "Name");
+    const std::size_t physical_name_column = column_index(items, "PhysicalName");
+    const std::size_t dataset_info_column = column_index(items, "DatasetInfo1");
+    const Table& geometry = require_table(core_tables, "GDB_GeomColumns");
+    const std::size_t geometry_table_column = column_index(geometry, "TableName");
+    const std::size_t geometry_field_column = column_index(geometry, "FieldName");
+    const std::size_t geometry_shape_type_column = column_index(geometry, "ShapeType");
+    const std::size_t geometry_srid_column = column_index(geometry, "SRID");
+    const std::size_t geometry_has_z_column = column_index(geometry, "HasZ");
+    const std::size_t geometry_has_m_column = column_index(geometry, "HasM");
+
+    const Table& spatial_refs = require_table(core_tables, "GDB_SpatialRefs");
+    const std::size_t srid_column = column_index(spatial_refs, "SRID");
+    const std::size_t srtext_column = column_index(spatial_refs, "SRTEXT");
+    std::map<std::int32_t, std::optional<std::string>> spatial_reference_text;
+    auto spatial_refs_cursor = spatial_refs.rows();
+    while (const auto row = spatial_refs_cursor.next()) {
+        const std::int32_t srid = require_int32(row->at(srid_column), "GDB_SpatialRefs.SRID");
+        check(spatial_reference_text.emplace(
+                  srid, optional_text(row->at(srtext_column), "GDB_SpatialRefs.SRTEXT"))
+                  .second,
+              "sample has duplicate GDB_SpatialRefs SRID");
+    }
+
+    std::vector<ExpectedLayer> expected_layers;
+    auto items_cursor = items.rows();
+    while (const auto item = items_cursor.next()) {
+        if (normalized_guid(item->at(item_type_column)) != *feature_class_type) {
+            continue;
+        }
+        ExpectedLayer expected;
+        expected.name = require_text(item->at(item_name_column), "GDB_Items.Name");
+        expected.table_name =
+            require_text(item->at(physical_name_column), "GDB_Items.PhysicalName");
+        expected.shape_column =
+            require_text(item->at(dataset_info_column), "GDB_Items.DatasetInfo1");
+
+        auto geometry_cursor = geometry.rows();
+        std::optional<std::vector<Value>> matching_geometry;
+        while (const auto row = geometry_cursor.next()) {
+            const auto& geometry_table =
+                require_text(row->at(geometry_table_column), "GDB_GeomColumns.TableName");
+            const auto& geometry_field =
+                require_text(row->at(geometry_field_column), "GDB_GeomColumns.FieldName");
+            if (ascii_equal_ignore_case(geometry_table, expected.table_name) &&
+                ascii_equal_ignore_case(geometry_field, expected.shape_column)) {
+                check(!matching_geometry, "sample has duplicate geometry catalog mappings");
+                matching_geometry = row->values();
+            }
+        }
+        check(matching_geometry.has_value(),
+              "sample Feature Class has no matching GDB_GeomColumns row");
+        expected.shape_type =
+            require_int32(matching_geometry->at(geometry_shape_type_column),
+                          "GDB_GeomColumns.ShapeType");
+        expected.spatial_reference_id =
+            optional_int32(matching_geometry->at(geometry_srid_column),
+                           "GDB_GeomColumns.SRID");
+        expected.has_z =
+            require_boolean(matching_geometry->at(geometry_has_z_column),
+                            "GDB_GeomColumns.HasZ");
+        expected.has_m =
+            require_boolean(matching_geometry->at(geometry_has_m_column),
+                            "GDB_GeomColumns.HasM");
+        expected.has_spatial_reference_row =
+            expected.spatial_reference_id &&
+            spatial_reference_text.find(*expected.spatial_reference_id) !=
+                spatial_reference_text.end();
+        if (expected.has_spatial_reference_row) {
+            expected.spatial_reference_text =
+                spatial_reference_text.at(*expected.spatial_reference_id);
+        }
+
+        const Table& core_table = require_table(core_tables, expected.table_name);
+        const auto& columns = core_table.columns();
+        const auto object_id = std::find_if(columns.begin(), columns.end(), [](const auto& column) {
+            return ascii_equal_ignore_case(column.name, "OBJECTID");
+        });
+        check(object_id != columns.end(), "sample feature table has no OBJECTID column");
+        expected.object_id_column = object_id->name;
+        expected_layers.push_back(std::move(expected));
+    }
+
+    check(expected_layers.size() == dataset.layers().size(),
+          "PGeo adapter layer count differs from the Feature Class catalog");
+    for (std::size_t layer_index = 0; layer_index < expected_layers.size(); ++layer_index) {
+        const auto& expected = expected_layers[layer_index];
+        const auto& layer = dataset.layers()[layer_index];
+        check(layer.name == expected.name,
+              "PGeo adapter layer order or name differs from GDB_Items");
+        check(layer.table_name == expected.table_name &&
+                  layer.shape_column == expected.shape_column &&
+                  layer.object_id_column == expected.object_id_column &&
+                  layer.shape_type == expected.shape_type &&
+                  layer.spatial_reference_id == expected.spatial_reference_id &&
+                  layer.has_z == expected.has_z && layer.has_m == expected.has_m,
+              "PGeo adapter metadata differs for layer " + expected.name);
+        check(layer.spatial_reference.has_value() == expected.has_spatial_reference_row,
+              "PGeo adapter SRS availability differs for layer " + expected.name);
+        if (expected.has_spatial_reference_row) {
+            check(layer.spatial_reference->id == *expected.spatial_reference_id &&
+                      layer.spatial_reference->definition == expected.spatial_reference_text,
+                  "PGeo adapter SRS definition differs for layer " + expected.name);
+        }
+
+        const Table& core_table = require_table(core_tables, expected.table_name);
+        std::vector<const rea_jackcess::ColumnInfo*> expected_attributes;
+        for (const auto& column : core_table.columns()) {
+            if (!ascii_equal_ignore_case(column.name, expected.object_id_column) &&
+                !ascii_equal_ignore_case(column.name, expected.shape_column)) {
+                expected_attributes.push_back(&column);
+            }
+        }
+        check(layer.attributes.size() == expected_attributes.size(),
+              "PGeo adapter omitted or added attributes for layer " + expected.name);
+        for (std::size_t index = 0; index < expected_attributes.size(); ++index) {
+            check(same_column_definition(layer.attributes[index], *expected_attributes[index]),
+                  "PGeo adapter attribute definition differs for layer " + expected.name);
+        }
+    }
+}
+
 void test_pinned_sample(const std::filesystem::path& path) {
     check(rea_jackcess::detail::sha256_file_hex(path) == sample_sha256,
           "PGeo sample does not match its pinned SHA-256");
@@ -322,6 +588,7 @@ void test_pinned_sample(const std::filesystem::path& path) {
               return layer.table_name == "GDB_Items";
           }),
           "PGeo catalog table was incorrectly exposed as a feature layer");
+    assert_sample_layers_match_core_catalogs(core_tables, dataset);
 
     std::size_t feature_count = 0;
     std::size_t nonempty_shapes = 0;
