@@ -2,7 +2,7 @@
 
 ## 项目是什么
 
-本仓库用 C++17 和 CMake 原生重写 Java Jackcess，目标是对齐固定基线 Jackcess 5.2.0 的公开能力与可观察行为，首期目标平台为 Linux x86_64 和 ARM64。Jet4 读写是首个内部里程碑；PGeo 导入和已有样本克隆是独立适配交付、独立验收。核心库不依赖 JVM、libmdb 或 GDAL。
+本仓库用 C++17 和 CMake 原生重写 Java Jackcess，目标是对齐固定基线 Jackcess 5.2.0 的公开能力与可观察行为，首期目标平台为 Linux x86_64 和 ARM64。首个里程碑是 Jet4 V2000/V2003 和 ACE V2007/V2010/V2016/V2019 普通库只读验收。按[只读优先实施计划](plan/Jackcess-C++重写/09-只读优先实施计划.md)和[只读优先开发交接](plan/Jackcess-C++重写/10-只读优先开发交接.md)推进。暂停新增写入能力，核心只读放行后独立推进 PGeo 导入，样本克隆随写入工作后移。核心库不依赖 JVM、libmdb 或 GDAL。
 
 ## 开工前
 
