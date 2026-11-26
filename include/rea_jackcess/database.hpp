@@ -136,8 +136,8 @@ private:
 // Accessors on a moved-from Database throw std::logic_error.
 // Options applied when a database is opened read-only.
 struct DatabaseOptions {
-    // Forces the code page used to decode legacy Jet3 text. 1252 (the default) and 819/28591 are
-    // supported; any other value is rejected by the open call.
+    // Forces the code page used to decode legacy Jet3 text. 1252 (the default), 819/28591,
+    // 936 (GBK) and 1251 are supported; any other value is rejected by the open call.
     std::optional<std::uint16_t> code_page;
     // Supplies the page codec for an encoded database. Leave empty for plain files: opening one
     // whose header declares encoding fails with unsupported_operation instead of decoding garbage.

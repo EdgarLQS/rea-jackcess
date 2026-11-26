@@ -302,6 +302,14 @@ if(EXISTS "${REA_JACKCESS_JET3_DIR}/queryV1997.mdb")
     set_tests_properties(jet3_query_read PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
+# The Jet3 code-page tables replay Java NIO; the Jet3 sample exercises the open-path overrides.
+add_executable(rea_jackcess_code_page_tests code_page_test.cpp)
+target_link_libraries(rea_jackcess_code_page_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_code_page_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME code_page COMMAND rea_jackcess_code_page_tests
+    "${REA_JACKCESS_JET3_DIR}/common1V1997.mdb")
+set_tests_properties(code_page PROPERTIES SKIP_RETURN_CODE 77)
+
 # A read-only handle needs a caller-supplied page codec for encoded pages; the test scrambles a
 # database it creates, so it needs no committed sample.
 add_executable(rea_jackcess_page_codec_tests page_codec_test.cpp)
