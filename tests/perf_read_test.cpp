@@ -59,8 +59,11 @@ Table find_user_table(const Database& database) {
 // so the test only asserts that every row comes back.
 int main(int argc, char** argv) {
     const int row_count = argc > 1 ? std::atoi(argv[1]) : 200000;
-    if (row_count <= 0) {
-        std::cerr << "usage: perf_read [row-count]\n";
+    // A non-zero memo length turns the run into the large-file scenario: 250k rows with 4000
+    // characters each produce roughly one gigabyte.
+    const int memo_chars = argc > 2 ? std::atoi(argv[2]) : 0;
+    if (row_count <= 0 || memo_chars < 0) {
+        std::cerr << "usage: perf_read [row-count] [memo-chars]\n";
         return 2;
     }
     const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -76,6 +79,7 @@ int main(int argc, char** argv) {
             rows.add_column("Code", rea_jackcess::DataType::text);
             rows.add_column("Amount", rea_jackcess::DataType::money);
             rows.add_column("Note", rea_jackcess::DataType::text);
+            rows.add_column("Body", rea_jackcess::DataType::memo);
             rows.add_index(rea_jackcess::IndexBuilder("PrimaryKey", "Id").with_primary_key());
             Database::create(path, DatabaseFormat::v2000, {rows});
             Database database = Database::open(path, rea_jackcess::DatabaseOpenMode::read_write);
@@ -84,8 +88,14 @@ int main(int argc, char** argv) {
             std::vector<std::vector<Value>> batch;
             batch.reserve(batch_size);
             for (int row = 0; row < row_count; ++row) {
+                Value body = std::monostate{};
+                if (memo_chars > 0) {
+                    const std::string text = "body-" + std::to_string(row) +
+                                             std::string(static_cast<std::size_t>(memo_chars), 'm');
+                    body = rea_jackcess::MemoValue{text, std::vector<std::uint8_t>(text.begin(), text.end())};
+                }
                 batch.push_back({row, code_for(row), DecimalValue{"12345.6789"},
-                                 "note-" + std::to_string(row)});
+                                 "note-" + std::to_string(row), body});
                 if (static_cast<int>(batch.size()) == batch_size) {
                     table.add_rows(batch);
                     batch.clear();
@@ -120,7 +130,7 @@ int main(int argc, char** argv) {
         check(id_sum == expected_sum, "Id sum mismatch");
 
         const auto size = std::filesystem::file_size(path);
-        std::cout << "perf_read rows=" << row_count << " bytes=" << size << " write_ms=" << write_ms
+        std::cout << "perf_read rows=" << row_count << " memo_chars=" << memo_chars << " bytes=" << size << " write_ms=" << write_ms
                   << " read_ms=" << read_ms << " peak_rss_kib=" << peak_rss_kib() << '\n';
         std::error_code ignored;
         std::filesystem::remove_all(directory, ignored);

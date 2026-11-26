@@ -1,10 +1,15 @@
 #include "code_page.hpp"
 
 #include <cstdint>
+#include <stdexcept>
+#include <string>
 
 namespace rea_jackcess::detail {
 
-std::string decode_code_page_text(const std::vector<std::uint8_t>& bytes) {
+std::string decode_code_page_text(const std::vector<std::uint8_t>& bytes, std::uint16_t code_page) {
+    if (code_page != 1252 && code_page != 819 && code_page != 28591) {
+        throw std::invalid_argument("Unsupported code page for Jet3 text: " + std::to_string(code_page));
+    }
     static const std::uint16_t cp1252_high[32] = {
         0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021,
         0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008d, 0x017d, 0x008f,
@@ -15,7 +20,7 @@ std::string decode_code_page_text(const std::vector<std::uint8_t>& bytes) {
     result.reserve(bytes.size());
     for (const std::uint8_t byte : bytes) {
         char32_t code_point = byte;
-        if (byte >= 0x80 && byte <= 0x9f) {
+        if (code_page == 1252 && byte >= 0x80 && byte <= 0x9f) {
             code_point = cp1252_high[byte - 0x80];
         }
         if (code_point < 0x80) {

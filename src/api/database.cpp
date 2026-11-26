@@ -1951,6 +1951,39 @@ Database Database::open(const std::filesystem::path& path, DatabaseOpenMode mode
                                                             std::move(write_lock)));
 }
 
+namespace {
+
+void validate_options(const DatabaseOptions& options, const std::filesystem::path& path) {
+    if (options.code_page && *options.code_page != 1252 && *options.code_page != 819 &&
+        *options.code_page != 28591) {
+        throw DatabaseError(DatabaseErrorCode::unsupported_operation,
+                            "Unsupported code page override: " + std::to_string(*options.code_page),
+                            path);
+    }
+}
+
+}  // namespace
+
+Database Database::open(const std::filesystem::path& path, DatabaseOptions options) {
+    validate_options(options, path);
+    auto file = detail::PageFile::open(path, options.code_page);
+    auto schema = detail::read_table_schema_catalog(file);
+    return Database(std::make_shared<detail::DatabaseState>(std::move(file),
+                                                            std::move(schema),
+                                                            false,
+                                                            std::nullopt));
+}
+
+Database Database::open(const std::vector<std::uint8_t>& bytes, DatabaseOptions options) {
+    validate_options(options, std::filesystem::path("<memory>"));
+    auto file = detail::PageFile::open(bytes, "<memory>", options.code_page);
+    auto schema = detail::read_table_schema_catalog(file);
+    return Database(std::make_shared<detail::DatabaseState>(std::move(file),
+                                                            std::move(schema),
+                                                            false,
+                                                            std::nullopt));
+}
+
 Database Database::open(const std::vector<std::uint8_t>& bytes) {
     auto file = detail::PageFile::open(bytes);
     auto schema = detail::read_table_schema_catalog(file);

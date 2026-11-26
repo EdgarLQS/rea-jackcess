@@ -31,15 +31,16 @@ Jet4Value decode_jet3_value(const PageFile& file,
         return std::monostate{};
     }
 
+    const std::uint16_t code_page = file.code_page_override().value_or(1252);
     if (column.type == text_type) {
-        return decode_code_page_text(*encoded.bytes);
+        return decode_code_page_text(*encoded.bytes, code_page);
     }
     if (column.type == memo_type) {
         if (encoded.bytes->empty()) {
             return std::monostate{};
         }
         const auto raw = read_long_value_bytes(file, table_name, row, column);
-        return MemoValue{decode_code_page_text(raw), raw};
+        return MemoValue{decode_code_page_text(raw, code_page), raw};
     }
 
     // Numbers, dates, GUIDs, binary data, BOOLEAN and the OLE container share the Jet4 layout.

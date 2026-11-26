@@ -281,3 +281,12 @@ target_include_directories(rea_jackcess_ole_stream_tests PRIVATE "${PROJECT_SOUR
 add_test(NAME ole_stream
     COMMAND rea_jackcess_ole_stream_tests "${REA_JACKCESS_FIXTURE_DIR}/jet4-index-v2000.mdb")
 set_tests_properties(ole_stream PROPERTIES SKIP_RETURN_CODE 77)
+
+if(EXISTS "${REA_JACKCESS_JET3_DIR}/common1V1997.mdb")
+    add_executable(rea_jackcess_database_options_tests database_options_test.cpp)
+    target_link_libraries(rea_jackcess_database_options_tests PRIVATE rea_jackcess::core)
+    target_include_directories(rea_jackcess_database_options_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME database_options
+        COMMAND rea_jackcess_database_options_tests "${REA_JACKCESS_JET3_DIR}/common1V1997.mdb")
+    set_tests_properties(database_options PROPERTIES SKIP_RETURN_CODE 77)
+endif()

@@ -158,7 +158,7 @@ std::optional<std::string> read_text(const PageFile& file,
     }
     try {
         if (file.format().version == EngineVersion::jet3) {
-            return decode_code_page_text(*encoded.bytes);
+            return decode_code_page_text(*encoded.bytes, file.code_page_override().value_or(1252));
         }
         return decode_jet4_text(*encoded.bytes);
     } catch (const DatabaseError& error) {

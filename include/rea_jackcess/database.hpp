@@ -133,6 +133,13 @@ private:
 };
 
 // Accessors on a moved-from Database throw std::logic_error.
+// Options applied when a database is opened read-only.
+struct DatabaseOptions {
+    // Forces the code page used to decode legacy Jet3 text. 1252 (the default) and 819/28591 are
+    // supported; any other value is rejected by the open call.
+    std::optional<std::uint16_t> code_page;
+};
+
 class Database {
 public:
     // Opens an existing Jet4 or ACE database read-only. Other formats remain unsupported here.
@@ -145,6 +152,10 @@ public:
     // Opens a database whose bytes already live in memory. The buffer must contain the whole
     // file; the handle is read-only and reports "<memory>" as its path in diagnostics.
     static Database open(const std::vector<std::uint8_t>& bytes);
+
+    // Read-only opens with explicit options.
+    static Database open(const std::filesystem::path& path, DatabaseOptions options);
+    static Database open(const std::vector<std::uint8_t>& bytes, DatabaseOptions options);
 
     // Creates a Jet4 database, then opens it for reading.
     // Replacing an existing file fails while it has an active read-write handle.
