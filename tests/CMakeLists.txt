@@ -199,3 +199,11 @@ endforeach()
 add_test(NAME corrupt_read_jet4
     COMMAND rea_jackcess_corrupt_read_tests "${REA_JACKCESS_FIXTURE_DIR}/jet4-data-v2000.mdb")
 set_tests_properties(corrupt_read_jet4 PROPERTIES SKIP_RETURN_CODE 77)
+
+# A damaged long-value pointer must fail with table/column/page context.
+add_executable(rea_jackcess_long_value_corrupt_tests long_value_corrupt_test.cpp)
+target_link_libraries(rea_jackcess_long_value_corrupt_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_long_value_corrupt_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME long_value_corrupt
+    COMMAND rea_jackcess_long_value_corrupt_tests "${REA_JACKCESS_FIXTURE_DIR}/jet4-data-v2000.mdb")
+set_tests_properties(long_value_corrupt PROPERTIES SKIP_RETURN_CODE 77)
