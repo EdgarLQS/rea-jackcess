@@ -46,6 +46,162 @@ Regeneration is only reproducible for the same Jackcess version: the fixtures fo
 [`plan/Jackcess-C++重写/README.md`](../../plan/Jackcess-C++重写/README.md). Update this table and
 the baseline record together when the fixture changes.
 
+## Generated Jet4 read fixtures
+
+Generated database files are **not committed**. The two Jet4 generators below write into the
+build tree, by default `build/fixtures`, which CMake exposes as the cache variable
+`REA_JACKCESS_FIXTURE_DIR` (`tests/CMakeLists.txt`). When a file is absent the matching CTest case
+exits with code 77 and CTest reports it as skipped, so a clean checkout stays green.
+
+Both generators need the fixed Jackcess 5.2.0 JAR (`$JACKCESS_JAR`) and a JDK:
+
+```sh
+javac -cp "$JACKCESS_JAR" -d "${TMPDIR:-/tmp}/rj-fixtures" tools/validation/JackcessJet4DataFixture.java
+javac -cp "$JACKCESS_JAR" -d "${TMPDIR:-/tmp}/rj-fixtures" tools/validation/JackcessJet4IndexFixture.java
+javac -cp "$JACKCESS_JAR" -d "${TMPDIR:-/tmp}/rj-fixtures" tools/validation/JackcessAceFixture.java
+mkdir -p build/fixtures
+java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessJet4DataFixture build/fixtures/jet4-data-v2000.mdb V2000
+java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessJet4DataFixture build/fixtures/jet4-data-v2003.mdb V2003
+java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessJet4IndexFixture build/fixtures/jet4-index-v2000.mdb V2000
+java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessJet4IndexFixture build/fixtures/jet4-index-v2003.mdb V2003
+java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessAceFixture build/fixtures/ace-v2016.accdb V2016
+java -cp "${TMPDIR:-/tmp}/rj-fixtures:$JACKCESS_JAR" JackcessAceFixture build/fixtures/ace-v2019.accdb V2019
+```
+
+Each generator prints the fixed-JAR reading of the file it just wrote, so the values can be
+compared with `rea-jackcess canonical` without a comparer. Regeneration reproduces the same values
+but not the same bytes: Jackcess stamps the object dates.
+
+### Jet4 data rows
+
+[`JackcessJet4DataFixture.java`](../../tools/validation/JackcessJet4DataFixture.java) writes
+`jet4-data-v2000.mdb` and `jet4-data-v2003.mdb`. The foreign-key and query fixtures only carry
+definitions, so every user table there is empty; these files add rows for the read path.
+
+Each file holds one user table, `DataRows`, with a LONG `Id` primary key and `Flag`, `ByteVal`,
+`IntVal`, `LongVal`, `FloatVal`, `DoubleVal`, `MoneyVal`, `DateVal`, `GuidVal`, `TextVal(50)`,
+`BinVal(32)`, `MemoVal`, and `OleVal` columns. Six rows cover:
+
+| Row | Coverage |
+|---|---|
+| 1 | every column type populated: non-ASCII text with a surrogate pair, 16-byte BINARY, 24-byte OLE, `1234.5678` MONEY, `2020-01-02 03:04:05` |
+| 2 | every nullable column NULL (a NULL BOOLEAN reads back as FALSE, matching Jackcess) |
+| 3 | a 9000-character MEMO that spans several data pages |
+| 4 | a short MEMO updated into the cross-page value, so the row is served from an overflow row |
+| 5 | boundaries: `-128`, `-32768`, `INT_MIN`, `-0.5`, `Double.MAX_VALUE`, `-0.0001`, zero GUID, empty TEXT/BINARY/MEMO/OLE, and the pre-epoch date `1899-12-29 18:30` |
+| 6 | text needing JSON escaping (quote, backslash, tab, CR, LF) and CRLF inside a MEMO |
+
+`jet4_data_read_v2000` / `jet4_data_read_v2003` assert the column definitions, all six rows,
+sequential and primary key scan order, reverse scan, a primary key lookup on the migrated row, and
+that the file bytes are unchanged after the read-only open.
+
+### Jet4 composite indexes
+
+[`JackcessJet4IndexFixture.java`](../../tools/validation/JackcessJet4IndexFixture.java) writes
+`jet4-index-v2000.mdb` and `jet4-index-v2003.mdb`. The single-column fixture above cannot reach
+composite TEXT keys, so these files add a second user table.
+
+`RegionCode` holds `Id` (LONG primary key), `Region` and `Code` (TEXT 8 units), `Seq` (LONG), and
+`Note` (MEMO), plus the unique ignore-nulls composite index `RegionCodeKey` over `(Region, Code)`.
+The nine rows and the fixed-JAR index order are:
+
+| Id | Region | Code | Index position |
+|---|---|---|---|
+| 1 | EU | A | 4 |
+| 2 | EU | B | 6 |
+| 3 | US | A | 8 |
+| 4 | AS | A | 2 |
+| 5 | EU | C | 7 |
+| 6 | NULL | Z | 1 (NULL sorts first) |
+| 7 | EU | NULL | 3 (NULL code sorts before `A`) |
+| 9 | US | B | 9 |
+| 10 | EU | AA | 5 (`A` sorts before `AA`) |
+
+The insertion order deliberately differs from the key order, so an index scan cannot match by
+accident on physical order.
+
+`LongValues` holds one row with a 9000-byte OLE payload that spans several data pages plus a
+`BinMax` BINARY column filled to its 255-byte maximum.
+
+`MemoKeys` carries a non-unique single-column MEMO index `MemoKeyIdx` over `(MemoKey)`. The key is
+truncated to 255 UTF-16 units, so row 4 is a 606-character memo whose index entry only covers the
+prefix, while the row itself must still read all 606 characters. NULL sorts first:
+
+| Id | MemoKey | Index position | BinMax |
+|---|---|---|---|
+| 1 | memo-b | 3 | 255 bytes |
+| 2 | memo-a | 2 | 255 bytes |
+| 3 | memo-c | 4 | 255 bytes |
+| 4 | `memo-d` + 600 `x` | 5 (truncated key) | 255 bytes |
+| 5 | NULL | 1 (NULL sorts first) | empty |
+
+`MixedKeys` adds a unique composite index over `(Tag, MemoKey)`, so the second key column is a
+MEMO truncated to 255 UTF-16 units. Row 4 stores a 406-character memo: the index entry keeps the
+prefix, the row keeps the full text, and a NULL tag sorts first.
+
+| Id | Tag | MemoKey | Index position |
+|---|---|---|---|
+| 1 | EU | memo-b | 3 |
+| 2 | EU | memo-a | 2 |
+| 3 | US | memo-a | 5 |
+| 4 | EU | `memo-c` + 400 `y` | 4 (truncated key) |
+| 5 | NULL | memo-z | 1 (NULL sorts first) |
+
+The generator also attempts to insert a duplicate `(EU, memo-b)` and requires the fixed JAR to
+reject it, which documents why the generated file never contains a unique-key conflict.
+
+`jet4_index_read_v2000` / `jet4_index_read_v2003` compare the composite index order, the reverse
+order, an `EU` prefix scan (both directions), the `[EU/A, US/A)` range, an exact composite lookup,
+the MEMO index order in both directions, the truncated-key row text, the 255-byte BINARY payload,
+the full OLE payload, the `(Tag, MemoKey)` composite index order and its prefix scan, and assert the
+file bytes stay unchanged.
+
+Jackcess stores a NULL key part as an index entry rather than skipping it, and it rejects a second
+fully-NULL key as a duplicate of the first, so the fixture keeps only one NULL per key position.
+
+### ACE V2016 and extra V2019
+
+[`JackcessAceFixture.java`](../../tools/validation/JackcessAceFixture.java) writes
+`ace-v2016.accdb` and `ace-v2019.accdb`. The committed ACE fixtures stop at V2010 plus the
+single-table V2019 extended-date resource, so V2016 had no sample at all.
+
+`V2016Data` holds `Id`, `Flag`, `Name` (TEXT 30 units), `Amount` (MONEY), `Created`
+(SHORT_DATE_TIME), `Ref` (GUID), `Memo`, and `Payload` (OLE) with three rows: a fully populated row
+whose MEMO passes 5000 characters, an all-NULL row, and a row with empty TEXT, MEMO, and OLE
+payloads. `V2019Data` holds `Id`, `Stamp` (EXT_DATE_TIME), and `Note` with six rows: NULL,
+`2020-01-02 03:04:05.123456789` (stored as 100 ns ticks, so it reads back as `123456700`), the years
+100, 1265, and 1765, and the pre-epoch `1899-12-29 18:30`.
+
+`ace_extra_read_v2016` / `ace_extra_read_v2019` assert the schema, every row value, and that the
+file bytes are unchanged after the read-only open. Both also read the system table `MSysResources`
+and require its `Data` column to expose the stored complex-value foreign key as a LONG, which is
+what Jackcess returns for that column.
+
+## Real sample comparison tools
+
+`test_data_only_read/test_mdb.mdb` is a real 1.5 MB Jet4 PGeo database with 43 user tables (Chinese
+names, spatial `SHAPE` BLOBs, `GDB_*` catalog tables) and 4 system tables. It stays outside version
+control; `real_sample` only registers when a local copy exists and pins its SHA-256
+`0bc0acb9c732de1e17c43c2d0a6019f7b5a62ccf83c5818a1bc42db7dbc460c6`.
+
+The full schema and row comparison against the fixed Jackcess 5.2.0 JAR uses two committed tools:
+
+```sh
+# C++ side
+build/rea-jackcess canonical test_data_only_read/test_mdb.mdb > /tmp/cpp.json
+
+# Fixed JAR side
+javac -cp "$JACKCESS_JAR" -d /tmp tools/validation/JackcessTableDump.java
+java -cp "/tmp:$JACKCESS_JAR" JackcessTableDump test_data_only_read/test_mdb.mdb /tmp/java.json
+
+python3 -I tools/validation/compare_table_dump.py /tmp/cpp.json /tmp/java.json
+```
+
+The comparer treats tables as row multisets and normalises formatting-only differences: decimals
+compare numerically, dates by calendar fields, GUIDs without braces or case, BLOBs by length and
+SHA-256, floats with a small relative tolerance. It exits 0 only when every table, column, and
+value matches. On 2026-11-26 the run reported `Compared 47 tables: schema and rows match.`
+
 ## ACE complex-column read fixtures
 
 `complex-data-v2007.accdb`, `complex-data-v2010.accdb` and `unsupported-fields-v2007.accdb` are the

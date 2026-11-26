@@ -37,6 +37,13 @@ std::array<std::uint8_t, 16> jet4_guid_bytes(std::string_view text);
 // `error` when the text is not a valid date inside the Access range.
 std::optional<double> jet4_date_serial(std::string_view text, std::string* error = nullptr);
 
+// Reads the long-value payload for a MEMO/OLE column without interpreting its text encoding.
+// Jet3 reuses it with code-page text decoding.
+std::vector<std::uint8_t> read_long_value_bytes(const PageFile& file,
+                                                const std::string& table_name,
+                                                const EncodedTableRow& row,
+                                                const ColumnDefinition& column);
+
 Jet4Value decode_jet4_value(const PageFile& file,
                             const std::string& table_name,
                             const EncodedTableRow& row,

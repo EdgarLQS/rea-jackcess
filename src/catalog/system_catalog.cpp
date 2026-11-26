@@ -1,5 +1,9 @@
 #include "system_catalog.hpp"
 
+#include "../value/value_decode.hpp"
+#include "../value/jet4_value.hpp"
+#include "../util/code_page.hpp"
+
 #include "property_map.hpp"
 #include "row_reader.hpp"
 #include "../format/jet_format.hpp"
@@ -153,6 +157,9 @@ std::optional<std::string> read_text(const PageFile& file,
         return std::nullopt;
     }
     try {
+        if (file.format().version == EngineVersion::jet3) {
+            return decode_code_page_text(*encoded.bytes, file.code_page_override().value_or(1252));
+        }
         return decode_jet4_text(*encoded.bytes);
     } catch (const DatabaseError& error) {
         DatabaseErrorContext context;
@@ -180,7 +187,7 @@ std::optional<std::vector<std::uint8_t>> read_property_bytes(const PageFile& fil
                       std::move(context));
     }
 
-    const auto value = decode_jet4_value(file, "MSysObjects", row, column);
+    const auto value = decode_value(file, "MSysObjects", row, column);
     if (const auto* blob = std::get_if<BlobValue>(&value)) {
         return blob->bytes;
     }
@@ -208,9 +215,10 @@ std::vector<SystemCatalogObject> read_system_catalog_objects(const PageFile& fil
                                                               const TableDefinition& definition,
                                                               std::optional<std::string_view> property_object_name,
                                                               bool read_link_fields) {
-    if (!has_jet4_page_layout(file.format().version)) {
+    if (!has_jet4_page_layout(file.format().version) &&
+        file.format().version != EngineVersion::jet3) {
         throw DatabaseError(DatabaseErrorCode::unsupported_version,
-                            "Jet4/ACE system catalog layout requested for an unsupported engine version",
+                            "System catalog layout requested for an unsupported engine version",
                             file.path());
     }
 
@@ -255,7 +263,7 @@ std::vector<SystemCatalogObject> read_system_catalog_objects(const PageFile& fil
                 if (!column) {
                     return std::nullopt;
                 }
-                const auto value = decode_jet4_value(file, "MSysObjects", row, *column);
+                const auto value = decode_value(file, "MSysObjects", row, *column);
                 if (const auto* text = std::get_if<std::string>(&value)) {
                     return *text;
                 }

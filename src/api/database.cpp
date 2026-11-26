@@ -7,7 +7,7 @@
 #include "index/index_cursor.hpp"
 #include "page/write_journal.hpp"
 #include "value/attachment_value.hpp"
-#include "value/jet4_value.hpp"
+#include "value/value_decode.hpp"
 #include "value/text_codec.hpp"
 #include "value/unicode_case.hpp"
 #include "write/jet4_database_creator.hpp"
@@ -17,6 +17,7 @@
 #include "write/jet4_table_creator.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <charconv>
 #include <chrono>
@@ -901,7 +902,7 @@ struct RowCursor::Impl {
     Value decode_column(const detail::EncodedTableRow& candidate,
                        const detail::ColumnDefinition& column) const {
         try {
-            return detail::decode_jet4_value(table->database->file, table_name(), candidate, column);
+            return detail::decode_value(table->database->file, table_name(), candidate, column);
         } catch (const std::exception& error) {
             if (!error_handler) {
                 throw;
@@ -1385,6 +1386,11 @@ bool Table::is_user_table() const {
     return state.database->schema.tables[state.schema_index].is_user_table;
 }
 
+bool Table::is_hidden() const {
+    const auto& state = checked_state(state_);
+    return state.database->schema.tables[state.schema_index].is_hidden;
+}
+
 bool Table::is_linked() const {
     const auto& state = checked_state(state_);
     return state.database->schema.tables[state.schema_index].is_linked;
@@ -1398,6 +1404,44 @@ std::uint32_t Table::row_count_header() const {
 const std::vector<ColumnInfo>& Table::columns() const {
     const auto& state = checked_state(state_);
     return state.database->columns[state.schema_index];
+}
+
+OleStream Table::ole_stream(std::string_view column_name, const Row& row) const {
+    const auto& state = checked_state(state_);
+    const auto& columns = state.database->columns[state.schema_index];
+    const auto found = std::find_if(columns.begin(), columns.end(), [&](const ColumnInfo& column) {
+        if (column.name.size() != column_name.size()) {
+            return false;
+        }
+        return std::equal(column.name.begin(), column.name.end(), column_name.begin(),
+                          [](char left, char right) {
+                              return std::tolower(static_cast<unsigned char>(left)) ==
+                                     std::tolower(static_cast<unsigned char>(right));
+                          });
+    });
+    if (found == columns.end()) {
+        throw DatabaseError(DatabaseErrorCode::unsupported_operation,
+                            "Table has no column named " + std::string(column_name),
+                            state.database->file.path());
+    }
+    if (found->type != DataType::ole) {
+        throw DatabaseError(DatabaseErrorCode::unsupported_operation,
+                            "Column " + found->name + " is not an OLE column",
+                            state.database->file.path());
+    }
+    const auto index = static_cast<std::size_t>(found - columns.begin());
+    if (index >= row.size()) {
+        throw DatabaseError(DatabaseErrorCode::unsupported_operation,
+                            "Row does not contain column " + found->name,
+                            state.database->file.path());
+    }
+    const auto* blob = std::get_if<BlobValue>(&row.at(index));
+    if (blob == nullptr) {
+        throw DatabaseError(DatabaseErrorCode::unsupported_operation,
+                            "Row has no OLE value in column " + found->name,
+                            state.database->file.path());
+    }
+    return OleStream(blob->bytes, found->name);
 }
 
 const std::vector<IndexInfo>& Table::indexes() const {
@@ -1910,6 +1954,48 @@ Database Database::open(const std::filesystem::path& path, DatabaseOpenMode mode
                                                             std::move(schema),
                                                             mode == DatabaseOpenMode::read_write,
                                                             std::move(write_lock)));
+}
+
+namespace {
+
+void validate_options(const DatabaseOptions& options, const std::filesystem::path& path) {
+    if (options.code_page && *options.code_page != 1252 && *options.code_page != 819 &&
+        *options.code_page != 28591) {
+        throw DatabaseError(DatabaseErrorCode::unsupported_operation,
+                            "Unsupported code page override: " + std::to_string(*options.code_page),
+                            path);
+    }
+}
+
+}  // namespace
+
+Database Database::open(const std::filesystem::path& path, DatabaseOptions options) {
+    validate_options(options, path);
+    auto file = detail::PageFile::open(path, options.code_page);
+    auto schema = detail::read_table_schema_catalog(file);
+    return Database(std::make_shared<detail::DatabaseState>(std::move(file),
+                                                            std::move(schema),
+                                                            false,
+                                                            std::nullopt));
+}
+
+Database Database::open(const std::vector<std::uint8_t>& bytes, DatabaseOptions options) {
+    validate_options(options, std::filesystem::path("<memory>"));
+    auto file = detail::PageFile::open(bytes, "<memory>", options.code_page);
+    auto schema = detail::read_table_schema_catalog(file);
+    return Database(std::make_shared<detail::DatabaseState>(std::move(file),
+                                                            std::move(schema),
+                                                            false,
+                                                            std::nullopt));
+}
+
+Database Database::open(const std::vector<std::uint8_t>& bytes) {
+    auto file = detail::PageFile::open(bytes);
+    auto schema = detail::read_table_schema_catalog(file);
+    return Database(std::make_shared<detail::DatabaseState>(std::move(file),
+                                                            std::move(schema),
+                                                            false,
+                                                            std::nullopt));
 }
 
 Database Database::create(const std::filesystem::path& path, DatabaseFormat format) {

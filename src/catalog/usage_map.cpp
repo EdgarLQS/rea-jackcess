@@ -61,9 +61,10 @@ void add_bitmap_pages(const PageFile& file,
 }
 
 std::vector<std::uint64_t> read_usage_map_pages(const PageFile& file, const UsageMapReference& reference) {
-    if (!has_jet4_page_layout(file.format().version)) {
+    if (!has_jet4_page_layout(file.format().version) &&
+        file.format().version != EngineVersion::jet3) {
         throw DatabaseError(DatabaseErrorCode::unsupported_version,
-                            "Jet4/ACE usage map layout requested for an unsupported engine version",
+                            "Usage map layout requested for an unsupported engine version",
                             file.path(),
                             reference.page_number);
     }

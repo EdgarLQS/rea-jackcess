@@ -12,8 +12,11 @@
 namespace rea_jackcess::detail {
 namespace {
 
-constexpr std::uint64_t row_column_count_size = 2;
-constexpr std::uint64_t fixed_data_row_offset = 2;
+constexpr std::uint64_t jet4_row_column_count_size = 2;
+constexpr std::uint64_t jet4_fixed_data_row_offset = 2;
+constexpr std::uint64_t jet3_row_column_count_size = 1;
+constexpr std::uint64_t jet3_fixed_data_row_offset = 1;
+constexpr std::uint64_t jump_table_stride = 256;
 
 std::uint16_t read_u16(const std::vector<std::uint8_t>& bytes, std::uint64_t offset) {
     return static_cast<std::uint16_t>(bytes[offset]) |
@@ -93,17 +96,70 @@ std::vector<std::uint8_t> read_complete_row(const PageFile& file,
 
 }
 
+// Jet3 stores one-byte variable-column offsets plus a jump table whose entries add 256 per jump.
+// The layout follows TableImpl.readJumpTableVarColOffsets in the fixed Jackcess 5.2.0 source.
+std::vector<std::uint16_t> jet3_variable_offsets(const PageFile& file,
+                                                 const std::string& table_name,
+                                                 std::uint64_t page_number,
+                                                 std::uint16_t row_number,
+                                                 const std::vector<std::uint8_t>& bytes,
+                                                 std::uint16_t row_column_count) {
+    const std::uint64_t null_mask_size = (static_cast<std::uint64_t>(row_column_count) + 7) / 8;
+    if (bytes.size() <= null_mask_size) {
+        corrupted_row(file, table_name, page_number, "Table row NULL mask is truncated", row_number);
+    }
+    const std::uint64_t null_mask_offset = bytes.size() - null_mask_size;
+    if (null_mask_offset < 1) {
+        corrupted_row(file, table_name, page_number, "Table row variable column count is missing", row_number);
+    }
+
+    const std::uint16_t variable_count = bytes[null_mask_offset - 1];
+    if (variable_count + 1u > bytes.size()) {
+        corrupted_row(file, table_name, page_number, "Table row variable column count is invalid", row_number);
+    }
+
+    std::uint64_t jumps = (bytes.size() - 1) / jump_table_stride;
+    std::int64_t column_offset = static_cast<std::int64_t>(null_mask_offset) -
+                                 static_cast<std::int64_t>(jumps) - 2;
+    if (column_offset < 0) {
+        corrupted_row(file, table_name, page_number, "Table row jump table is truncated", row_number);
+    }
+    if ((column_offset - static_cast<std::int64_t>(variable_count)) / static_cast<std::int64_t>(jump_table_stride) <
+        static_cast<std::int64_t>(jumps)) {
+        --jumps;
+    }
+
+    std::vector<std::uint16_t> offsets(variable_count + 1u);
+    std::uint64_t jumps_used = 0;
+    for (std::uint32_t index = 0; index <= variable_count; ++index) {
+        while (jumps_used < jumps && index == bytes[null_mask_offset - jumps_used - 2]) {
+            ++jumps_used;
+        }
+        const std::int64_t position = column_offset - static_cast<std::int64_t>(index);
+        if (position < 0) {
+            corrupted_row(file, table_name, page_number, "Table row variable offsets are truncated", row_number);
+        }
+        offsets[index] = static_cast<std::uint16_t>(bytes[position] + jumps_used * jump_table_stride);
+    }
+    return offsets;
+}
+
 EncodedTableRow decode_row_layout(const PageFile& file,
                                   const std::string& table_name,
                                   std::uint64_t page_number,
                                   std::uint16_t row_number,
                                   const std::vector<std::uint8_t>& bytes,
                                   const TableDefinition& definition) {
+    const bool jet3 = file.format().version == EngineVersion::jet3;
+    const std::uint64_t row_column_count_size = jet3 ? jet3_row_column_count_size : jet4_row_column_count_size;
+    const std::uint64_t fixed_data_row_offset =
+        jet3 ? jet3_fixed_data_row_offset : jet4_fixed_data_row_offset;
     if (bytes.size() < row_column_count_size) {
         corrupted_row(file, table_name, page_number, "Table row is shorter than its column count", row_number);
     }
 
-    const std::uint16_t row_column_count = read_u16(bytes, 0);
+    const std::uint16_t row_column_count =
+        jet3 ? static_cast<std::uint16_t>(bytes[0]) : read_u16(bytes, 0);
     if (row_column_count > definition.maximum_column_count) {
         corrupted_row(file, table_name, page_number, "Table row column count exceeds its table definition", row_number);
     }
@@ -112,6 +168,10 @@ EncodedTableRow decode_row_layout(const PageFile& file,
         corrupted_row(file, table_name, page_number, "Table row NULL mask is truncated", row_number);
     }
     const std::uint64_t null_mask_offset = bytes.size() - null_mask_size;
+
+    const std::vector<std::uint16_t> jet3_offsets =
+        jet3 ? jet3_variable_offsets(file, table_name, page_number, row_number, bytes, row_column_count)
+             : std::vector<std::uint16_t>{};
 
     std::vector<EncodedColumnValue> values;
     std::uint16_t highest_column_number = 0;
@@ -148,6 +208,18 @@ EncodedTableRow decode_row_layout(const PageFile& file,
             if (end < start || end > null_mask_offset) {
                 corrupted_row(file, table_name, page_number,
                               "Table row fixed column extends beyond row data", row_number, &column);
+            }
+        } else if (jet3) {
+            const std::uint64_t variable_index = column.variable_table_index;
+            if (variable_index + 1 >= jet3_offsets.size()) {
+                corrupted_row(file, table_name, page_number,
+                              "Table row variable column index is outside the table schema", row_number, &column);
+            }
+            start = jet3_offsets[variable_index];
+            end = jet3_offsets[variable_index + 1];
+            if (start > end || end > null_mask_offset || start < row_column_count_size) {
+                corrupted_row(file, table_name, page_number,
+                              "Table row variable column offsets are invalid", row_number, &column);
             }
         } else {
             const std::uint64_t variable_index = column.variable_table_index;
@@ -186,11 +258,12 @@ struct TableRowReader::Impl {
         : file(source_file),
           table_name(std::move(source_table_name)),
           definition(source_definition) {
-        if (!has_jet4_page_layout(file.format().version)) {
+        if (!has_jet4_page_layout(file.format().version) &&
+            file.format().version != EngineVersion::jet3) {
             DatabaseErrorContext context;
             context.table_name = table_name;
             throw DatabaseError(DatabaseErrorCode::unsupported_version,
-                                "Jet4/ACE table row layout requested for an unsupported engine version",
+                                "Table row layout requested for an unsupported engine version",
                                 file.path(),
                                 std::nullopt,
                                 std::move(context));

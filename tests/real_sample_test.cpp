@@ -248,6 +248,9 @@ int main(int argc, char** argv) {
             std::filesystem::remove(copy);
         }
 
+        // All writes above ran on a copy; the source sample must still hash to the pinned value.
+        check(rea_jackcess::detail::sha256_file_hex(path) == pinned_sample_sha256,
+              "the real sample changed during the read and copy-write checks");
         std::cout << "real sample reads, index seeks and table writes passed\n";
         return 0;
     } catch (const std::exception& error) {

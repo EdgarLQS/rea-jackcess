@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [only-read, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-x86_64:
+    name: linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain versions
+        run: |
+          cmake --version | head -1
+          g++ --version | head -1
+          javac -version
+      - name: Build and test
+        run: bash .github/scripts/ci.sh
+      - name: Print the test log on failure
+        if: failure()
+        run: |
+          log=build/Testing/Temporary/LastTest.log
+          if [ -f "$log" ]; then
+            echo "### CTest log (linux-x86_64)" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 200 "$log" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat "$log"
+          fi
+      - name: Upload the test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ctest-log-linux-x86_64
+          path: build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+
+  # Native arm64 runner, available to public repositories.
+  linux-arm64:
+    name: linux-arm64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and test
+        run: bash .github/scripts/ci.sh
+      - name: Print the test log on failure
+        if: failure()
+        run: |
+          log=build/Testing/Temporary/LastTest.log
+          if [ -f "$log" ]; then
+            echo "### CTest log (linux-arm64)" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 200 "$log" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat "$log"
+          fi
+      - name: Upload the test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ctest-log-linux-arm64
+          path: build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+
+  sanitizers:
+    name: sanitizers-linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and test with sanitizers
+        env:
+          SANITIZE: "1"
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: bash .github/scripts/ci.sh
+      - name: Print the test log on failure
+        if: failure()
+        run: |
+          log=build/Testing/Temporary/LastTest.log
+          if [ -f "$log" ]; then
+            echo "### CTest log (sanitizers)" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            tail -n 200 "$log" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            cat "$log"
+          fi
+      - name: Upload the test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ctest-log-sanitizers
+          path: build/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore

@@ -60,6 +60,7 @@ endfunction()
 rea_jackcess_add_package(api
     api/complex_values.cpp
     api/database.cpp
+    api/ole_stream.cpp
     api/database_file.cpp
     api/relationships.cpp
     api/queries.cpp
@@ -89,12 +90,14 @@ rea_jackcess_add_package(catalog
     catalog/system_catalog.cpp
     catalog/table_catalog.cpp
     catalog/table_definition.cpp
+    catalog/jet3_table_definition.cpp
     catalog/usage_map.cpp
 )
 
 rea_jackcess_add_package(value
     value/attachment_value.cpp
     value/jet4_value.cpp
+    value/jet3_value.cpp
     value/text_codec.cpp
     value/unicode_case.cpp
 )
@@ -169,4 +172,5 @@ rea_jackcess_add_package(write
 rea_jackcess_add_package(util
     util/little_endian.hpp
     util/sha256.cpp
+    util/code_page.cpp
 )

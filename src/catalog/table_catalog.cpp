@@ -13,6 +13,7 @@ constexpr std::int16_t table_object_type = 1;
 constexpr std::int16_t linked_odbc_object_type = 4;
 constexpr std::int16_t linked_table_object_type = 6;
 constexpr std::uint32_t system_object_flags = 0x80000002u;
+constexpr std::uint32_t hidden_object_flags = 0x08u;
 constexpr std::uint8_t system_table_type = 0x53;
 constexpr std::uint8_t user_table_type = 0x4e;
 
@@ -26,9 +27,10 @@ void add_error(TableSchemaCatalog& catalog,
 }
 
 TableSchemaCatalog read_table_schema_catalog(const PageFile& file) {
-    if (!has_jet4_page_layout(file.format().version)) {
+    const bool jet3 = file.format().version == EngineVersion::jet3;
+    if (!has_jet4_page_layout(file.format().version) && !jet3) {
         throw DatabaseError(DatabaseErrorCode::unsupported_version,
-                            "Jet4/ACE table schema enumeration requested for an unsupported engine version",
+                            "Table schema enumeration requested for an unsupported engine version",
                             file.path());
     }
 
@@ -53,7 +55,8 @@ TableSchemaCatalog read_table_schema_catalog(const PageFile& file) {
 
         try {
             auto definition = read_table_definition(file, static_cast<std::uint64_t>(*object.id));
-            if (object.property_column_present) {
+            // Jet3 property maps have a different layout; nullability and defaults stay unknown.
+            if (object.property_column_present && !jet3) {
                 definition.column_properties_available = true;
                 if (object.property_error) {
                     add_error(result, name, *object.property_error, object.property_error_page);
@@ -115,12 +118,15 @@ TableSchemaCatalog read_table_schema_catalog(const PageFile& file) {
             } else if (!is_user_table) {
                 add_error(result, name, "Table definition has an unknown table type", *object.id);
             }
+            const bool is_hidden = object.flags &&
+                                   (static_cast<std::uint32_t>(*object.flags) & hidden_object_flags) != 0;
             result.tables.push_back({
                 name,
                 static_cast<std::uint64_t>(*object.id),
                 std::move(object_type),
                 is_user_table,
                 false,
+                is_hidden,
                 std::move(definition),
             });
         } catch (const DatabaseError& error) {

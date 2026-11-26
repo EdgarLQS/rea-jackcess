@@ -13,14 +13,27 @@ namespace rea_jackcess::detail {
 namespace {
 
 constexpr std::uint64_t table_definition_page_offset = 4;
-constexpr std::uint64_t previous_page_offset = 12;
-constexpr std::uint64_t next_page_offset = 16;
-constexpr std::uint64_t child_tail_page_offset = 20;
-constexpr std::uint64_t compressed_prefix_length_offset = 24;
-constexpr std::uint64_t index_level_offset = 26;
-constexpr std::uint64_t entry_mask_offset = 27;
-constexpr std::uint64_t entry_mask_size = 453;
-constexpr std::uint64_t entry_data_offset = entry_mask_offset + entry_mask_size;
+struct IndexPageLayout {
+    std::uint64_t previous_page_offset;
+    std::uint64_t next_page_offset;
+    std::uint64_t child_tail_page_offset;
+    std::uint64_t compressed_prefix_length_offset;
+    std::uint64_t entry_mask_offset;
+    std::uint64_t entry_mask_size;
+    bool has_level;
+    std::uint64_t level_offset;
+
+    std::uint64_t entry_data_offset() const { return entry_mask_offset + entry_mask_size; }
+};
+
+IndexPageLayout index_page_layout(EngineVersion version) {
+    if (version == EngineVersion::jet3) {
+        // Jet3 keeps the shorter header and has no level byte; the page type separates leaf from
+        // node pages. Values come from JetFormat.Jet3Format.
+        return {8, 12, 16, 20, 22, 226, false, 0};
+    }
+    return {12, 16, 20, 24, 27, 453, true, 26};
+}
 constexpr std::uint64_t leaf_entry_trailer_size = 4;
 constexpr std::uint64_t node_entry_trailer_size = 8;
 
@@ -122,8 +135,9 @@ IndexPage read_index_page(const PageFile& file,
         invalid_index_page(file, table_name, page_number, "Index page reference is outside the database");
     }
 
+    const IndexPageLayout layout = index_page_layout(file.format().version);
     const std::vector<std::uint8_t> bytes = file.read_page(page_number);
-    if (bytes.size() != file.format().page_size || bytes.size() < entry_data_offset) {
+    if (bytes.size() != file.format().page_size || bytes.size() < layout.entry_data_offset()) {
         invalid_index_page(file, table_name, page_number, "Index page has an invalid byte length");
     }
     if (bytes[0] != static_cast<std::uint8_t>(PageType::index_leaf) &&
@@ -136,14 +150,16 @@ IndexPage read_index_page(const PageFile& file,
     }
 
     const bool leaf = bytes[0] == static_cast<std::uint8_t>(PageType::index_leaf);
-    const std::uint8_t level = bytes[index_level_offset];
+    // Jet3 has no level byte; the page type carries the same information.
+    const std::uint8_t level = layout.has_level ? bytes[layout.level_offset]
+                                                : static_cast<std::uint8_t>(leaf ? 0 : 1);
     if ((leaf && level != 0) || (!leaf && level == 0)) {
         invalid_index_page(file, table_name, page_number, "Index page type and level disagree");
     }
 
-    const std::uint32_t previous_page_number = read_u32_le(bytes, previous_page_offset);
-    const std::uint32_t next_page_number = read_u32_le(bytes, next_page_offset);
-    const std::uint32_t child_tail_page_number = read_u32_le(bytes, child_tail_page_offset);
+    const std::uint32_t previous_page_number = read_u32_le(bytes, layout.previous_page_offset);
+    const std::uint32_t next_page_number = read_u32_le(bytes, layout.next_page_offset);
+    const std::uint32_t child_tail_page_number = read_u32_le(bytes, layout.child_tail_page_offset);
     validate_page_reference(file, table_name, page_number, previous_page_number,
                             "Index page has an invalid previous-page reference");
     validate_page_reference(file, table_name, page_number, next_page_number,
@@ -151,9 +167,9 @@ IndexPage read_index_page(const PageFile& file,
     validate_page_reference(file, table_name, page_number, child_tail_page_number,
                             "Index page has an invalid child-tail reference");
 
-    const std::uint16_t prefix_length = read_u16_le(bytes, compressed_prefix_length_offset);
+    const std::uint16_t prefix_length = read_u16_le(bytes, layout.compressed_prefix_length_offset);
     const std::uint16_t free_space = read_u16_le(bytes, 2);
-    const std::uint64_t data_capacity = bytes.size() - entry_data_offset;
+    const std::uint64_t data_capacity = bytes.size() - layout.entry_data_offset();
     if (free_space > data_capacity) {
         invalid_index_page(file, table_name, page_number, "Index page free-space count is out of range");
     }
@@ -162,8 +178,8 @@ IndexPage read_index_page(const PageFile& file,
     std::vector<std::uint8_t> common_prefix;
     std::uint64_t last_end = 0;
     const std::uint64_t trailer_size = leaf ? leaf_entry_trailer_size : node_entry_trailer_size;
-    for (std::uint64_t mask_byte = 0; mask_byte < entry_mask_size; ++mask_byte) {
-        const std::uint8_t mask = bytes[entry_mask_offset + mask_byte];
+    for (std::uint64_t mask_byte = 0; mask_byte < layout.entry_mask_size; ++mask_byte) {
+        const std::uint8_t mask = bytes[layout.entry_mask_offset + mask_byte];
         for (std::uint8_t bit = 0; bit < 8; ++bit) {
             if ((mask & static_cast<std::uint8_t>(1u << bit)) == 0) {
                 continue;
@@ -178,7 +194,7 @@ IndexPage read_index_page(const PageFile& file,
                 invalid_index_page(file, table_name, page_number, "Index entry is shorter than its row reference");
             }
 
-            const std::uint64_t start = entry_data_offset + last_end;
+            const std::uint64_t start = layout.entry_data_offset() + last_end;
             const std::uint64_t key_suffix_length = compressed_length - trailer_size;
             IndexPageEntry entry;
             if (entries.empty()) {
@@ -264,7 +280,8 @@ struct IndexEntryCursor::Impl {
           start_key(std::move(source_start_key)),
           stop_key(std::move(source_stop_key)),
           reverse(source_reverse) {
-        if (!has_jet4_page_layout(file.format().version)) {
+        if (!has_jet4_page_layout(file.format().version) &&
+            file.format().version != EngineVersion::jet3) {
             DatabaseErrorContext context;
             context.table_name = table_name;
             throw DatabaseError(DatabaseErrorCode::unsupported_version,

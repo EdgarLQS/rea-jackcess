@@ -39,18 +39,6 @@ constexpr std::uint8_t boolean_type = 0x01;
                         std::move(context));
 }
 
-std::uint16_t read_u16(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
-    return static_cast<std::uint16_t>(bytes[offset]) |
-           static_cast<std::uint16_t>(static_cast<std::uint16_t>(bytes[offset + 1]) << 8);
-}
-
-std::uint32_t read_u32(const std::vector<std::uint8_t>& bytes, std::size_t offset) {
-    return static_cast<std::uint32_t>(bytes[offset]) |
-           (static_cast<std::uint32_t>(bytes[offset + 1]) << 8) |
-           (static_cast<std::uint32_t>(bytes[offset + 2]) << 16) |
-           (static_cast<std::uint32_t>(bytes[offset + 3]) << 24);
-}
-
 bool equals_ignore_case(std::string_view left, std::string_view right) {
     return java_string_uppercase_key_equal_utf8(left, right);
 }

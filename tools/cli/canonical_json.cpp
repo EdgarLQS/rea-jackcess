@@ -3,6 +3,7 @@
 #include "catalog/table_catalog.hpp"
 #include "format/jet_format.hpp"
 #include "value/jet4_value.hpp"
+#include "value/value_decode.hpp"
 #include "util/sha256.hpp"
 
 #include <algorithm>
@@ -122,6 +123,9 @@ std::optional<std::string_view> canonical_type(std::uint8_t mdb_type) {
             return "guid";
         case 0x10:
             return "numeric";
+        case 0x12:
+            // A complex column stores a 4-byte foreign key into its flat table.
+            return "complex";
         case 0x13:
             return "int64";
         default:
@@ -267,7 +271,7 @@ SerializedTableRows serialize_table_rows(const PageFile& file, const ReadableTab
                 serialized_row << ',';
             }
             const auto& column = table.definition.columns[index];
-            write_canonical_value(serialized_row, decode_jet4_value(file, table.name, row, column));
+            write_canonical_value(serialized_row, decode_value(file, table.name, row, column));
         }
         serialized_row << ']';
         result.rows.push_back(serialized_row.str());
@@ -538,7 +542,8 @@ void write_canonical_json(std::ostream& output,
                               error.what(), error.page_number(), error.context().row_number});
         }
         write_schema_table(output, table, rows ? &*rows : nullptr);
-        if (!table.definition.columns.empty() && !table.definition.column_properties_available) {
+        if (!table.definition.columns.empty() && !table.definition.column_properties_available &&
+            file.format().version != EngineVersion::jet3) {
             errors.push_back({"column-schema", table.name, std::nullopt,
                               "Column property maps are unavailable; nullable values are null", std::nullopt});
         }

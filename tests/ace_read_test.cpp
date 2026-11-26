@@ -4,7 +4,9 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -27,6 +29,13 @@ void check(bool condition, const std::string& message) {
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+// A read-only open must not rewrite the fixture, including the system tables the reader walks.
+std::string read_bytes(const std::filesystem::path& path) {
+    std::ifstream input(path, std::ios::binary);
+    check(static_cast<bool>(input), "could not read the ACE fixture");
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
 const Value& value_for_column(const Table& table, const Row& row, std::string_view column_name) {
@@ -552,6 +561,7 @@ int main(int argc, char** argv) {
     }
     const std::string version(argv[2]);
     try {
+        const std::string before = read_bytes(argv[1]);
         if (version == "unsupported") {
             check_unsupported_complex_type(argv[1]);
         } else if (version == "ace2019") {
@@ -563,6 +573,7 @@ int main(int argc, char** argv) {
             check_read_only_ace(argv[1], expected);
         }
         check_ace_write_rejected(argv[1]);
+        check(read_bytes(argv[1]) == before, "a read-only ACE open modified the fixture");
         std::cout << version << " read-only ACE tests passed\n";
         return 0;
     } catch (const std::exception& error) {
