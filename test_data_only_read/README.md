@@ -9,6 +9,15 @@
 
 `tests/real_sample_test.cpp` 固定上面的哈希；哈希不符时用例直接失败，避免样本被替换或改动。
 
+## 本地验证样本（未入库）
+
+`test_mdb_2.mdb`（Jet4 PGeo，4,882,432 字节，SHA-256 `a3d77555362404f4042e12bb7f0f7b44c6214100fec193ff91233a70733bb7bf`）只存在于开发者本机，**不入库**（`.gitignore` 已排除）。它是一份独立的真实 PGeo 库，使用较新的 `GDB_FeatureClasses`+`GDB_ObjectClasses` 目录布局（区别于 `test_mdb.mdb` 的 `GDB_Items`+`GDB_ItemTypes`），用于验证 PGeo 适配层对两种布局的支持：
+
+- 48 张表对固定 Jackcess 5.2.0 JAR 逐表一致；
+- 暴露 2 个图层 `报批数据_1`（16 要素）与 `China面地图_100_4326`（2371 要素），逐要素按 OBJECTID 与 SHAPE 字节与核心表完全一致。
+
+对应回归：合成用例 `pgeo_layer_reader`（含 GDB_FeatureClasses 布局）、设计见[PG-01 设计](../plan/Jackcess-C++重写/13-PGeo原始载荷读取设计.md)。该样本不参与 CI，也不在 `real_sample`/`pgeo_sample_read` 用例里固定哈希。
+
 ## 来源与使用边界
 
 - 该文件是真实项目导出的 PGeo 库，含 43 张用户表（中文表名、`SHAPE` 空间 BLOB、`GDB_*` 目录表）
