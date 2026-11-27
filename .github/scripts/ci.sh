@@ -45,20 +45,46 @@ fi
 
 mkdir -p "$JAR_CACHE"
 base="https://repo1.maven.org/maven2"
-curl -fsSL -o "$JAR_CACHE/jackcess-$JACKCESS_VERSION.jar" \
-    "$base/io/github/spannm/jackcess/$JACKCESS_VERSION/jackcess-$JACKCESS_VERSION.jar"
-curl -fsSL -o "$JAR_CACHE/commons-lang3-3.14.0.jar" \
-    "$base/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar"
-curl -fsSL -o "$JAR_CACHE/commons-logging-1.2.jar" \
-    "$base/commons-logging/commons-logging/1.2/commons-logging-1.2.jar"
+
 if command -v sha256sum >/dev/null 2>&1; then
-    check_hash() { echo "$1  $2" | sha256sum -c -; }
+    hash_matches() { echo "$1  $2" | sha256sum -c - >/dev/null 2>&1; }
 else
-    check_hash() { echo "$1  $2" | shasum -a 256 -c -; }
+    hash_matches() { echo "$1  $2" | shasum -a 256 -c - >/dev/null 2>&1; }
 fi
-check_hash "$JACKCESS_SHA256" "$JAR_CACHE/jackcess-$JACKCESS_VERSION.jar"
-check_hash "$LANG3_SHA256" "$JAR_CACHE/commons-lang3-3.14.0.jar"
-check_hash "$COMMONS_LOGGING_SHA256" "$JAR_CACHE/commons-logging-1.2.jar"
+
+# Maven Central rate-limits bursty CI IPs with HTTP 429, so retry transient failures instead of
+# failing the job. A cached copy that already matches its pinned hash is reused without a request;
+# a copy that fails the hash is discarded and re-fetched.
+fetch() {
+    local url="$1" output="$2" expected_sha="$3" attempt=1 delay=5
+    if [ -s "$output" ] && [ -n "$expected_sha" ] && hash_matches "$expected_sha" "$output"; then
+        return 0
+    fi
+    while [ "$attempt" -le 6 ]; do
+        if curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors -o "$output.part" "$url"; then
+            if [ -z "$expected_sha" ] || hash_matches "$expected_sha" "$output.part"; then
+                mv "$output.part" "$output"
+                return 0
+            fi
+            echo "Downloaded $url failed its pinned hash; retrying" >&2
+        else
+            echo "Download attempt $attempt failed for $url; retrying in ${delay}s" >&2
+        fi
+        rm -f "$output.part"
+        sleep "$delay"
+        attempt=$((attempt + 1))
+        delay=$((delay * 2))
+    done
+    echo "Failed to obtain $url after $((attempt - 1)) attempts" >&2
+    return 1
+}
+
+fetch "$base/io/github/spannm/jackcess/$JACKCESS_VERSION/jackcess-$JACKCESS_VERSION.jar" \
+    "$JAR_CACHE/jackcess-$JACKCESS_VERSION.jar" "$JACKCESS_SHA256"
+fetch "$base/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar" \
+    "$JAR_CACHE/commons-lang3-3.14.0.jar" "$LANG3_SHA256"
+fetch "$base/commons-logging/commons-logging/1.2/commons-logging-1.2.jar" \
+    "$JAR_CACHE/commons-logging-1.2.jar" "$COMMONS_LOGGING_SHA256"
 
 jars="$JAR_CACHE/*"
 classes="$JAR_CACHE/classes"
@@ -97,15 +123,15 @@ cmake "${cmake_args[@]}"
 # that directory; when the download fails those cases simply stay unregistered.
 if [ ! -f "$JET3_SAMPLES/common1V1997.mdb" ]; then
     tarball="/tmp/jackcess-5.2.0-source.tar.gz"
-    if curl -fsSL -o "$tarball" \
-        "https://github.com/spannm/jackcess/archive/refs/tags/jackcess-5.2.0.tar.gz"; then
-        check_hash "$JET3_TARBALL_SHA256" "$tarball"
+    if curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors -o "$tarball" \
+        "https://github.com/spannm/jackcess/archive/refs/tags/jackcess-5.2.0.tar.gz" \
+        && hash_matches "$JET3_TARBALL_SHA256" "$tarball"; then
         mkdir -p "$JET3_SAMPLES"
         tar -xzf "$tarball" -C "$JET3_SAMPLES" --strip-components=6 \
             jackcess-jackcess-5.2.0/src/test/resources/data/V1997
         echo "Jet3 samples: $(find "$JET3_SAMPLES" -name '*.mdb' | wc -l) files"
     else
-        echo "Jet3 sample download failed; Jet3 cases stay unregistered" >&2
+        echo "Jet3 sample download failed or failed its hash; Jet3 cases stay unregistered" >&2
     fi
 fi
 
