@@ -309,69 +309,28 @@ Dataset Dataset::open(const std::filesystem::path& path) {
     const auto tables = database.tables();
     const Table* item_types = find_table(tables, "GDB_ItemTypes");
     const Table* items = find_table(tables, "GDB_Items");
+    const Table* feature_classes = find_table(tables, "GDB_FeatureClasses");
+    const Table* object_classes = find_table(tables, "GDB_ObjectClasses");
     const Table* geometry_columns = find_table(tables, "GDB_GeomColumns");
-    const unsigned int catalog_count = static_cast<unsigned int>(item_types != nullptr) +
-                                       static_cast<unsigned int>(items != nullptr) +
-                                       static_cast<unsigned int>(geometry_columns != nullptr);
-    if (catalog_count == 0) {
+    // Two PGeo catalog layouts are recognised:
+    //  - "items" layout: GDB_ItemTypes + GDB_Items + GDB_GeomColumns.
+    //  - "feature classes" layout: GDB_FeatureClasses + GDB_ObjectClasses + GDB_GeomColumns.
+    // The geometry and spatial-reference tables are shared by both.
+    const bool items_layout = item_types != nullptr || items != nullptr;
+    const bool feature_classes_layout = feature_classes != nullptr || object_classes != nullptr;
+    if (geometry_columns == nullptr) {
         throw_catalog_error(path,
                             DatabaseErrorCode::unsupported_operation,
                             "database does not contain the PGeo layer catalogs");
     }
-    if (catalog_count != 3) {
-        const std::string missing = item_types == nullptr
-                                        ? "GDB_ItemTypes"
-                                        : (items == nullptr ? "GDB_Items" : "GDB_GeomColumns");
-        throw_corrupt_catalog(path, "PGeo catalog is missing " + missing, missing);
+    if (items_layout && feature_classes_layout) {
+        throw_corrupt_catalog(
+            path, "PGeo catalog mixes the GDB_Items and GDB_FeatureClasses layouts", "GDB_Items");
     }
-
-    const std::size_t type_name_column = require_column(*item_types, "Name", path);
-    const std::size_t type_uuid_column = require_column(*item_types, "UUID", path);
-    std::optional<std::string> feature_class_type;
-    {
-        auto cursor = item_types->rows();
-        std::uint64_t row_number = 0;
-        while (const auto row = cursor.next()) {
-            ++row_number;
-            const std::string name = require_string(cell(*row, type_name_column),
-                                                    path,
-                                                    item_types->name(),
-                                                    "Name",
-                                                    row_number,
-                                                    type_name_column);
-            if (!ascii_equal_ignore_case(name, "Feature Class")) {
-                continue;
-            }
-            const std::string key = require_guid_key(cell(*row, type_uuid_column),
-                                                     path,
-                                                     item_types->name(),
-                                                     "UUID",
-                                                     row_number,
-                                                     type_uuid_column);
-            if (feature_class_type && *feature_class_type != key) {
-                throw_corrupt_catalog(path,
-                                      "GDB_ItemTypes contains conflicting Feature Class identifiers",
-                                      item_types->name(),
-                                      "UUID",
-                                      row_number,
-                                      type_uuid_column);
-            }
-            if (feature_class_type) {
-                throw_corrupt_catalog(path,
-                                      "GDB_ItemTypes contains duplicate Feature Class identifiers",
-                                      item_types->name(),
-                                      "Name",
-                                      row_number,
-                                      type_name_column);
-            }
-            feature_class_type = key;
-        }
-    }
-    if (!feature_class_type) {
-        throw_corrupt_catalog(path,
-                              "GDB_ItemTypes has no Feature Class type",
-                              item_types->name(),
-                              "Name");
+    if (!items_layout && !feature_classes_layout) {
+        throw_catalog_error(path,
+                            DatabaseErrorCode::unsupported_operation,
+                            "database does not contain the PGeo layer catalogs");
     }
 
     const std::size_t geom_table_column = require_column(*geometry_columns, "TableName", path);
@@ -467,14 +426,189 @@ Dataset Dataset::open(const std::filesystem::path& path) {
         }
     }
 
-    const std::size_t item_type_column = require_column(*items, "Type", path);
-    const std::size_t item_name_column = require_column(*items, "Name", path);
-    const std::size_t physical_name_column = require_column(*items, "PhysicalName", path);
-    const std::size_t geometry_name_column = require_column(*items, "DatasetInfo1", path);
     std::vector<LayerInfo> layers;
     std::set<std::string> layer_names;
     std::set<std::string> physical_names;
-    {
+
+    // Builds a LayerInfo for one feature class from its display name, physical table name and the
+    // matching GDB_GeomColumns record. Context arguments name the catalog table/columns and the row
+    // for error messages. Shared by both catalog layouts.
+    const auto build_layer = [&](const std::string& name,
+                                 const std::string& physical_name,
+                                 const GeometryRecord& geometry,
+                                 const std::string& context_table,
+                                 const std::string& name_column,
+                                 std::uint64_t row_number,
+                                 std::size_t name_column_number) -> LayerInfo {
+        const Table* table = find_table(tables, physical_name);
+        if (table == nullptr) {
+            throw_corrupt_catalog(path,
+                                  "PGeo Feature Class references a missing local table",
+                                  context_table,
+                                  name_column,
+                                  row_number,
+                                  name_column_number);
+        }
+        const auto object_id_index = find_column(*table, "OBJECTID");
+        const auto shape_index = find_column(*table, geometry.field_name);
+        if (!object_id_index) {
+            throw_corrupt_catalog(path,
+                                  "PGeo Feature Class has no OBJECTID column",
+                                  table->name(),
+                                  "OBJECTID");
+        }
+        if (table->columns()[*object_id_index].type != DataType::int32) {
+            throw_corrupt_catalog(path,
+                                  "PGeo OBJECTID column is not a LONG integer",
+                                  table->name(),
+                                  table->columns()[*object_id_index].name,
+                                  std::nullopt,
+                                  *object_id_index);
+        }
+        if (!shape_index) {
+            throw_corrupt_catalog(path,
+                                  "PGeo Feature Class has no geometry column",
+                                  table->name(),
+                                  geometry.field_name);
+        }
+        const DataType shape_type = table->columns()[*shape_index].type;
+        if (shape_type != DataType::ole && shape_type != DataType::binary) {
+            throw_corrupt_catalog(path,
+                                  "PGeo geometry column is not OLE or BINARY",
+                                  table->name(),
+                                  table->columns()[*shape_index].name,
+                                  std::nullopt,
+                                  *shape_index);
+        }
+        if (!layer_names.insert(name).second ||
+            !physical_names.insert(physical_name).second) {
+            throw_corrupt_catalog(path,
+                                  "PGeo catalog contains a duplicate Feature Class name or table",
+                                  context_table,
+                                  name_column,
+                                  row_number,
+                                  name_column_number);
+        }
+
+        LayerInfo info{name,
+                       table->name(),
+                       table->columns()[*object_id_index].name,
+                       table->columns()[*shape_index].name,
+                       geometry.shape_type,
+                       geometry.has_z,
+                       geometry.has_m,
+                       geometry.spatial_reference_id,
+                       std::nullopt,
+                       {}};
+        for (std::size_t column_index = 0; column_index < table->columns().size(); ++column_index) {
+            if (column_index != *object_id_index && column_index != *shape_index) {
+                info.attributes.push_back(table->columns()[column_index]);
+            }
+        }
+        if (info.spatial_reference_id) {
+            const auto spatial_reference = spatial_references.find(*info.spatial_reference_id);
+            if (spatial_reference != spatial_references.end()) {
+                info.spatial_reference = spatial_reference->second;
+            }
+        }
+        return info;
+    };
+
+    // Finds the unique GDB_GeomColumns record for a physical table name, preferring FieldName when
+    // the caller knows the declared geometry field.
+    const auto match_geometry = [&](const std::string& physical_name,
+                                    const std::optional<std::string>& expected_field,
+                                    const std::string& context_table,
+                                    std::uint64_t row_number,
+                                    std::size_t name_column_number) -> const GeometryRecord& {
+        const auto matches = [&](const GeometryRecord& candidate) {
+            if (!ascii_equal_ignore_case(candidate.table_name, physical_name)) {
+                return false;
+            }
+            return !expected_field ||
+                   ascii_equal_ignore_case(candidate.field_name, *expected_field);
+        };
+        const auto geometry = std::find_if(geometry_records.begin(), geometry_records.end(), matches);
+        if (geometry == geometry_records.end()) {
+            throw_corrupt_catalog(path,
+                                  "Feature Class has no matching GDB_GeomColumns row",
+                                  context_table,
+                                  "TableName",
+                                  row_number,
+                                  name_column_number);
+        }
+        if (std::find_if(std::next(geometry), geometry_records.end(), matches) !=
+            geometry_records.end()) {
+            throw_corrupt_catalog(path,
+                                  "Feature Class has multiple GDB_GeomColumns rows",
+                                  geometry_columns->name(),
+                                  "TableName",
+                                  geometry->row_number,
+                                  geom_table_column);
+        }
+        return *geometry;
+    };
+
+    if (items_layout) {
+        if (item_types == nullptr || items == nullptr) {
+            const std::string missing = item_types == nullptr ? "GDB_ItemTypes" : "GDB_Items";
+            throw_corrupt_catalog(path, "PGeo catalog is missing " + missing, missing);
+        }
+        std::optional<std::string> feature_class_type;
+        {
+            const std::size_t type_name_column = require_column(*item_types, "Name", path);
+            const std::size_t type_uuid_column = require_column(*item_types, "UUID", path);
+            auto cursor = item_types->rows();
+            std::uint64_t row_number = 0;
+            while (const auto row = cursor.next()) {
+                ++row_number;
+                const std::string name = require_string(cell(*row, type_name_column),
+                                                        path,
+                                                        item_types->name(),
+                                                        "Name",
+                                                        row_number,
+                                                        type_name_column);
+                if (!ascii_equal_ignore_case(name, "Feature Class")) {
+                    continue;
+                }
+                const std::string key = require_guid_key(cell(*row, type_uuid_column),
+                                                         path,
+                                                         item_types->name(),
+                                                         "UUID",
+                                                         row_number,
+                                                         type_uuid_column);
+                if (feature_class_type && *feature_class_type != key) {
+                    throw_corrupt_catalog(
+                        path,
+                        "GDB_ItemTypes contains conflicting Feature Class identifiers",
+                        item_types->name(),
+                        "UUID",
+                        row_number,
+                        type_uuid_column);
+                }
+                if (feature_class_type) {
+                    throw_corrupt_catalog(
+                        path,
+                        "GDB_ItemTypes contains duplicate Feature Class identifiers",
+                        item_types->name(),
+                        "Name",
+                        row_number,
+                        type_name_column);
+                }
+                feature_class_type = key;
+            }
+        }
+        if (!feature_class_type) {
+            throw_corrupt_catalog(path,
+                                  "GDB_ItemTypes has no Feature Class type",
+                                  item_types->name(),
+                                  "Name");
+        }
+
+        const std::size_t item_type_column = require_column(*items, "Type", path);
+        const std::size_t item_name_column = require_column(*items, "Name", path);
+        const std::size_t physical_name_column = require_column(*items, "PhysicalName", path);
+        const std::size_t geometry_name_column = require_column(*items, "DatasetInfo1", path);
         auto cursor = items->rows();
         std::uint64_t row_number = 0;
         while (const auto row = cursor.next()) {
@@ -518,109 +652,109 @@ Dataset Dataset::open(const std::filesystem::path& path) {
                                       row_number);
             }
 
-            const auto geometry = std::find_if(
-                geometry_records.begin(), geometry_records.end(), [&](const auto& candidate) {
-                    return ascii_equal_ignore_case(candidate.table_name, physical_name);
-                });
-            if (geometry == geometry_records.end()) {
-                throw_corrupt_catalog(path,
-                                      "Feature Class has no matching GDB_GeomColumns row",
-                                      items->name(),
-                                      "PhysicalName",
-                                      row_number,
-                                      physical_name_column);
-            }
-            if (std::find_if(std::next(geometry), geometry_records.end(), [&](const auto& candidate) {
-                    return ascii_equal_ignore_case(candidate.table_name, physical_name);
-                }) != geometry_records.end()) {
-                throw_corrupt_catalog(path,
-                                      "Feature Class has multiple GDB_GeomColumns rows",
-                                      geometry_columns->name(),
-                                      "TableName",
-                                      geometry->row_number,
-                                      geom_table_column);
-            }
-            if (!ascii_equal_ignore_case(geometry->field_name, dataset_geometry_name)) {
+            const GeometryRecord& geometry =
+                match_geometry(physical_name, dataset_geometry_name, items->name(), row_number,
+                               physical_name_column);
+            if (!ascii_equal_ignore_case(geometry.field_name, dataset_geometry_name)) {
                 throw_corrupt_catalog(path,
                                       "GDB_Items and GDB_GeomColumns disagree on the geometry field",
                                       geometry_columns->name(),
                                       "FieldName",
-                                      geometry->row_number,
+                                      geometry.row_number,
                                       geom_field_column);
             }
+            layers.push_back(build_layer(name, physical_name, geometry, items->name(),
+                                         "PhysicalName", row_number, physical_name_column));
+        }
+    } else {
+        // GDB_FeatureClasses layout: each feature class names its physical table (GDB_ObjectClasses.Name)
+        // and geometry field (GDB_FeatureClasses.ShapeField), joined on ObjectClasses.ID = ObjectClassID.
+        const std::size_t fc_class_id_column = require_column(*feature_classes, "ObjectClassID", path);
+        const std::size_t fc_shape_field_column = require_column(*feature_classes, "ShapeField", path);
+        const std::size_t oc_id_column = require_column(*object_classes, "ID", path);
+        const std::size_t oc_name_column = require_column(*object_classes, "Name", path);
 
-            const Table* table = find_table(tables, physical_name);
-            if (table == nullptr) {
-                throw_corrupt_catalog(path,
-                                      "PGeo Feature Class references a missing local table",
-                                      items->name(),
-                                      "PhysicalName",
-                                      row_number,
-                                      physical_name_column);
-            }
-            const auto object_id_index = find_column(*table, "OBJECTID");
-            const auto shape_index = find_column(*table, geometry->field_name);
-            if (!object_id_index) {
-                throw_corrupt_catalog(path,
-                                      "PGeo Feature Class has no OBJECTID column",
-                                      table->name(),
-                                      "OBJECTID");
-            }
-            if (table->columns()[*object_id_index].type != DataType::int32) {
-                throw_corrupt_catalog(path,
-                                      "PGeo OBJECTID column is not a LONG integer",
-                                      table->name(),
-                                      table->columns()[*object_id_index].name,
-                                      std::nullopt,
-                                      *object_id_index);
-            }
-            if (!shape_index) {
-                throw_corrupt_catalog(path,
-                                      "PGeo Feature Class has no geometry column",
-                                      table->name(),
-                                      geometry->field_name);
-            }
-            const DataType shape_type = table->columns()[*shape_index].type;
-            if (shape_type != DataType::ole && shape_type != DataType::binary) {
-                throw_corrupt_catalog(path,
-                                      "PGeo geometry column is not OLE or BINARY",
-                                      table->name(),
-                                      table->columns()[*shape_index].name,
-                                      std::nullopt,
-                                      *shape_index);
-            }
-            if (!layer_names.insert(name).second ||
-                !physical_names.insert(physical_name).second) {
-                throw_corrupt_catalog(path,
-                                      "PGeo catalog contains a duplicate Feature Class name or table",
-                                      items->name(),
-                                      "PhysicalName",
-                                      row_number,
-                                      physical_name_column);
-            }
-
-            LayerInfo info{name,
-                           table->name(),
-                           table->columns()[*object_id_index].name,
-                           table->columns()[*shape_index].name,
-                           geometry->shape_type,
-                           geometry->has_z,
-                           geometry->has_m,
-                           geometry->spatial_reference_id,
-                           std::nullopt,
-                           {}};
-            for (std::size_t column_index = 0; column_index < table->columns().size(); ++column_index) {
-                if (column_index != *object_id_index && column_index != *shape_index) {
-                    info.attributes.push_back(table->columns()[column_index]);
+        std::map<std::int32_t, std::pair<std::string, std::uint64_t>> object_classes_by_id;
+        {
+            auto cursor = object_classes->rows();
+            std::uint64_t row_number = 0;
+            while (const auto row = cursor.next()) {
+                ++row_number;
+                const std::int32_t id = require_int32(cell(*row, oc_id_column),
+                                                      path,
+                                                      object_classes->name(),
+                                                      "ID",
+                                                      row_number,
+                                                      oc_id_column);
+                const std::string name = require_string(cell(*row, oc_name_column),
+                                                        path,
+                                                        object_classes->name(),
+                                                        "Name",
+                                                        row_number,
+                                                        oc_name_column);
+                if (!object_classes_by_id.emplace(id, std::make_pair(name, row_number)).second) {
+                    throw_corrupt_catalog(path,
+                                          "GDB_ObjectClasses contains a duplicate ID",
+                                          object_classes->name(),
+                                          "ID",
+                                          row_number,
+                                          oc_id_column);
                 }
             }
-            if (info.spatial_reference_id) {
-                const auto spatial_reference = spatial_references.find(*info.spatial_reference_id);
-                if (spatial_reference != spatial_references.end()) {
-                    info.spatial_reference = spatial_reference->second;
-                }
+        }
+
+        auto cursor = feature_classes->rows();
+        std::uint64_t row_number = 0;
+        while (const auto row = cursor.next()) {
+            ++row_number;
+            const std::int32_t object_class_id = require_int32(cell(*row, fc_class_id_column),
+                                                               path,
+                                                               feature_classes->name(),
+                                                               "ObjectClassID",
+                                                               row_number,
+                                                               fc_class_id_column);
+            const std::string shape_field = require_string(cell(*row, fc_shape_field_column),
+                                                           path,
+                                                           feature_classes->name(),
+                                                           "ShapeField",
+                                                           row_number,
+                                                           fc_shape_field_column);
+            const auto object_class = object_classes_by_id.find(object_class_id);
+            if (object_class == object_classes_by_id.end()) {
+                throw_corrupt_catalog(path,
+                                      "GDB_FeatureClasses references a missing GDB_ObjectClasses row",
+                                      feature_classes->name(),
+                                      "ObjectClassID",
+                                      row_number,
+                                      fc_class_id_column);
             }
-            layers.push_back(std::move(info));
+            const std::string& physical_name = object_class->second.first;
+            if (physical_name.empty() || shape_field.empty()) {
+                throw_corrupt_catalog(path,
+                                      "GDB_FeatureClasses entry has an empty name or shape field",
+                                      feature_classes->name(),
+                                      physical_name.empty() ? "GDB_ObjectClasses.Name" : "ShapeField",
+                                      row_number);
+            }
+
+            const GeometryRecord& geometry =
+                match_geometry(physical_name, shape_field, feature_classes->name(), row_number,
+                               fc_class_id_column);
+            if (!ascii_equal_ignore_case(geometry.field_name, shape_field)) {
+                throw_corrupt_catalog(path,
+                                      "GDB_FeatureClasses and GDB_GeomColumns disagree on the geometry field",
+                                      geometry_columns->name(),
+                                      "FieldName",
+                                      geometry.row_number,
+                                      geom_field_column);
+            }
+            layers.push_back(build_layer(physical_name,
+                                         physical_name,
+                                         geometry,
+                                         feature_classes->name(),
+                                         "ShapeField",
+                                         row_number,
+                                         fc_shape_field_column));
         }
     }
 

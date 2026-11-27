@@ -207,6 +207,93 @@ void create_synthetic_database(const std::filesystem::path& path, bool include_s
                     std::string("raw-shape")}});
 }
 
+// Builds a PGeo database using the "feature classes" catalog layout
+// (GDB_FeatureClasses + GDB_ObjectClasses) instead of GDB_ItemTypes + GDB_Items.
+void create_feature_classes_database(const std::filesystem::path& path) {
+    std::vector<TableBuilder> schema;
+
+    TableBuilder object_classes("GDB_ObjectClasses");
+    object_classes.add_column("ID", DataType::int32).add_column("Name", DataType::text);
+    schema.push_back(object_classes);
+
+    TableBuilder feature_classes("GDB_FeatureClasses");
+    feature_classes.add_column("ObjectClassID", DataType::int32)
+        .add_column("ShapeField", DataType::text);
+    schema.push_back(feature_classes);
+
+    TableBuilder geometry("GDB_GeomColumns");
+    geometry.add_column("TableName", DataType::text)
+        .add_column("FieldName", DataType::text)
+        .add_column("ShapeType", DataType::int32)
+        .add_column("SRID", DataType::int32)
+        .add_column("HasZ", DataType::boolean)
+        .add_column("HasM", DataType::boolean);
+    schema.push_back(geometry);
+
+    TableBuilder spatial_refs("GDB_SpatialRefs");
+    spatial_refs.add_column("SRID", DataType::int32).add_column("SRTEXT", DataType::memo);
+    schema.push_back(spatial_refs);
+
+    TableBuilder features("FeatureData");
+    features.add_column("OBJECTID", DataType::int32)
+        .add_column("Shape", DataType::ole)
+        .add_column("Label", DataType::text);
+    schema.push_back(features);
+
+    {
+        const auto database = Database::create(path, DatabaseFormat::v2003, schema);
+    }
+
+    auto writable = Database::open(path, rea_jackcess::DatabaseOpenMode::read_write);
+    auto tables = writable.tables();
+    require_table(tables, "GDB_ObjectClasses")
+        .add_row({std::int32_t{1}, std::string("FeatureData")});
+    require_table(tables, "GDB_FeatureClasses")
+        .add_row({std::int32_t{1}, std::string("Shape")});
+    require_table(tables, "GDB_GeomColumns")
+        .add_row({std::string("FeatureData"),
+                  std::string("Shape"),
+                  std::int32_t{1},
+                  std::int32_t{4326},
+                  false,
+                  false});
+    require_table(tables, "GDB_SpatialRefs")
+        .add_row({std::int32_t{4326}, MemoValue{"EPSG:4326", {}}});
+    require_table(tables, "FeatureData")
+        .add_rows({{std::int32_t{7}, rea_jackcess::BlobValue{{0x02, 0x00, 0x00}}, std::string("a")},
+                   {std::int32_t{8}, std::monostate{}, std::string("null-shape")}});
+}
+
+void test_feature_classes_layout() {
+    TemporaryDatabase file("-feature-classes");
+    create_feature_classes_database(file.path());
+
+    auto dataset = Dataset::open(file.path());
+    check(dataset.layers().size() == 1,
+          "GDB_FeatureClasses layout did not expose exactly one layer");
+    const auto& layer = dataset.layers().front();
+    check(layer.name == "FeatureData" && layer.table_name == "FeatureData",
+          "GDB_FeatureClasses layer did not use the object-class name");
+    check(layer.object_id_column == "OBJECTID" && layer.shape_column == "Shape" &&
+              layer.shape_type == 1 && !layer.has_z && !layer.has_m,
+          "GDB_FeatureClasses geometry metadata was not mapped");
+    check(layer.spatial_reference_id == 4326 && layer.spatial_reference &&
+              layer.spatial_reference->definition == std::optional<std::string>("EPSG:4326"),
+          "GDB_FeatureClasses layer SRS was not resolved");
+    check(layer.attributes.size() == 1 && layer.attributes.front().name == "Label",
+          "GDB_FeatureClasses attribute schema was not exposed");
+
+    auto reader = dataset.open_layer("FeatureData");
+    const auto first = reader.next();
+    const auto second = reader.next();
+    check(first && first->object_id == 7 && first->shape &&
+              *first->shape == std::vector<std::uint8_t>({0x02, 0x00, 0x00}),
+          "GDB_FeatureClasses layer did not return the first feature's SHAPE");
+    check(second && second->object_id == 8 && !second->shape,
+          "GDB_FeatureClasses layer did not preserve a NULL SHAPE");
+    check(!reader.next(), "feature-classes reader returned rows past the end");
+}
+
 void test_non_pgeo_is_rejected() {
     TemporaryDatabase file("-ordinary");
     TableBuilder table("Ordinary");
@@ -668,6 +755,7 @@ int main(int argc, char** argv) {
         }
         test_non_pgeo_is_rejected();
         test_synthetic_feature_read();
+        test_feature_classes_layout();
         if (argc == 3 && std::string(argv[1]) == "sample") {
             test_pinned_sample(argv[2]);
         } else if (argc != 1) {
