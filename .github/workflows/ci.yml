@@ -7,6 +7,55 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Runs the 1 GB read scenario explicitly on both target architectures and keeps the measured
+  # time and peak RSS as a downloadable log (R1.3). The scenario creates its own database, so it
+  # does not depend on the fixtures step in ci.sh.
+  perf:
+    name: perf-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: linux-x86_64
+            runner: ubuntu-24.04
+          - arch: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain versions
+        run: |
+          cmake --version | head -1
+          g++ --version | head -1
+      - name: Build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake ninja-build zlib1g-dev
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build -j"$(nproc)" --target rea_jackcess_perf_read_tests
+      - name: 1 GB read scenario
+        run: |
+          mkdir -p perf-logs
+          /usr/bin/time -v -o perf-logs/perf-${{ matrix.arch }}-time.txt \
+            ./build/tests/rea_jackcess_perf_read_tests 130000 4000 \
+            | tee perf-logs/perf-${{ matrix.arch }}.txt
+      - name: Enforce the frozen gate (read <= 60 s, peak RSS <= 512 MiB)
+        run: |
+          line=$(grep '^perf_read rows=' perf-logs/perf-${{ matrix.arch }}.txt)
+          read_ms=$(printf '%s\n' "$line" | sed -n 's/.*read_ms=\([0-9]*\).*/\1/p')
+          rss_kib=$(printf '%s\n' "$line" | sed -n 's/.*peak_rss_kib=\([0-9]*\).*/\1/p')
+          echo "read_ms=$read_ms peak_rss_kib=$rss_kib"
+          test "$read_ms" -le 60000
+          test "$rss_kib" -le $((512 * 1024))
+      - name: Upload the perf log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: perf-log-${{ matrix.arch }}
+          path: perf-logs/
+          if-no-files-found: warn
+
   linux-x86_64:
     name: linux-x86_64
     runs-on: ubuntu-24.04

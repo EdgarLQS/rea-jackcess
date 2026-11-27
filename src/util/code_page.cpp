@@ -1,6 +1,7 @@
 #include "code_page.hpp"
 
 #include "../util/code_page_1251.inc"
+#include "../util/code_page_932.inc"
 #include "../util/code_page_gbk.inc"
 
 #include <cstdint>
@@ -49,20 +50,26 @@ void decode_single_byte(std::string& out, const std::uint16_t* table,
 
 // Decodes a DBCS page by replaying the Java NIO results recorded in the generated table. A lead
 // byte followed by a trail outside the table window replaces the lead and re-decodes the trail,
-// mirroring the malformed-run behaviour verified by the generator.
-void decode_gbk(std::string& out, const std::vector<std::uint8_t>& bytes) {
+// mirroring the malformed-run behaviour verified by the generator. Both the GBK and Shift-JIS
+// tables share this one-byte-or-two-byte layout, so the loop is templated on the page's tables.
+template <std::size_t Rows>
+void decode_dbcs(std::string& out, const std::vector<std::uint8_t>& bytes,
+                 const std::uint16_t (&single)[256], const std::uint16_t (&double_rows)[Rows][191],
+                 const std::uint8_t (&lead_row)[128]) {
+    static_assert(Rows > 0, "DBCS tables need at least one lead row");
+    static_assert(191 == (trail_max - trail_min + 1), "DBCS column count must match the trail window");
     std::size_t index = 0;
     while (index < bytes.size()) {
         const std::uint8_t byte = bytes[index];
         if (byte < 0x80) {
-            append_code_point(out, cp936_single[byte]);
+            append_code_point(out, single[byte]);
             ++index;
             continue;
         }
-        const std::uint8_t row = cp936_lead_row[byte - 0x80];
+        const std::uint8_t row = lead_row[byte - 0x80];
         if (row == 255 || index + 1 >= bytes.size()) {
             // A non-lead high byte, or a lead at the end of the buffer, is a malformed run.
-            append_code_point(out, cp936_single[byte]);
+            append_code_point(out, single[byte]);
             ++index;
             continue;
         }
@@ -75,16 +82,16 @@ void decode_gbk(std::string& out, const std::vector<std::uint8_t>& bytes) {
         }
         if (trail < trail_min) {
             append_code_point(out, replacement);
-            append_code_point(out, cp936_single[trail]);
+            append_code_point(out, single[trail]);
             index += 2;
             continue;
         }
-        const std::uint16_t value = cp936_double[row][trail - trail_min];
+        const std::uint16_t value = double_rows[row][trail - trail_min];
         if (value == replacement) {
             append_code_point(out, replacement);
         } else if (value == replace_then_trail) {
             append_code_point(out, replacement);
-            append_code_point(out, cp936_single[trail]);
+            append_code_point(out, single[trail]);
         } else {
             append_code_point(out, value);
         }
@@ -118,8 +125,11 @@ std::string decode_code_page_text(const std::vector<std::uint8_t>& bytes, std::u
         case 1251:
             decode_single_byte(result, cp1251_single, bytes);
             return result;
+        case 932:
+            decode_dbcs(result, bytes, cp932_single, cp932_double, cp932_lead_row);
+            return result;
         case 936:
-            decode_gbk(result, bytes);
+            decode_dbcs(result, bytes, cp936_single, cp936_double, cp936_lead_row);
             return result;
         default:
             throw std::invalid_argument("Unsupported code page for Jet3 text: " + std::to_string(code_page));

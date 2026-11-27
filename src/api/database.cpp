@@ -1961,7 +1961,8 @@ namespace {
 
 void validate_options(const DatabaseOptions& options, const std::filesystem::path& path) {
     if (options.code_page && *options.code_page != 1252 && *options.code_page != 819 &&
-        *options.code_page != 28591 && *options.code_page != 936 && *options.code_page != 1251) {
+        *options.code_page != 28591 && *options.code_page != 936 && *options.code_page != 1251 &&
+        *options.code_page != 932) {
         throw DatabaseError(DatabaseErrorCode::unsupported_operation,
                             "Unsupported code page override: " + std::to_string(*options.code_page),
                             path);

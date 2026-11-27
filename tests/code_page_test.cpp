@@ -98,6 +98,39 @@ void test_gbk_malformed() {
     check(whole == expected, "936 stream decoding produced unexpected text: " + whole);
 }
 
+void test_shift_jis() {
+    // Shift-JIS double bytes (Java charset windows-31J): テ=8365 ス=8358 ト=8367, 日=93FA
+    // 本=967B 語=8CEA. Expected strings were probed from Java 21 windows-31J, not copied from the
+    // generator.
+    check(decode({0x83, 0x65, 0x83, 0x58, 0x83, 0x67}, 932) ==
+              "\xe3\x83\x86\xe3\x82\xb9\xe3\x83\x88",
+          "932 did not decode テスト");
+    check(decode({0x93, 0xFA, 0x96, 0x7B, 0x8C, 0xEA}, 932) ==
+              "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e",
+          "932 did not decode 日本語");
+    // ASCII passes through, including inside mixed text.
+    check(decode({0x41, 0x83, 0x65, 0x42}, 932) == "A\xe3\x83\x86" "B",
+          "932 did not keep ASCII next to double bytes");
+    // Shift-JIS quirk: 0x815F is the full-width reverse solidus (U+FF3C), while a lone 0x5C stays
+    // ASCII. Single bytes 0x80 are unmappable; 0xA1..0xDF are half-width katakana.
+    check(decode({0x81, 0x5F}, 932) == "\xef\xbc\xbc", "932 did not decode full-width backslash");
+    check(decode({0x5C}, 932) == "\\", "932 did not keep ASCII backslash");
+    check(decode({0x80}, 932) == "\xef\xbf\xbd", "932 did not replace a lone 0x80");
+    check(decode({0xA1}, 932) == "\xef\xbd\xa1", "932 did not decode half-width katakana");
+    check(decode({0xDF}, 932) == "\xef\xbe\x9f", "932 did not decode half-width katakana DF");
+}
+
+void test_shift_jis_malformed() {
+    const std::string replacement = "\xef\xbf\xbd";
+    // A lead at the end of the buffer is one malformed run.
+    check(decode({0x83}, 932) == replacement, "932 did not replace a trailing lead");
+    // An invalid trail replaces the lead and then re-decodes the trail (Java REPLACE semantics).
+    check(decode({0x83, 0x20}, 932) == replacement + " ",
+          "932 did not replace an invalid trail and re-decode it");
+    // 0xFF swallows the whole pair, verified against Java's windows-31J decoder.
+    check(decode({0x81, 0xFF}, 932) == replacement, "932 did not replace the 0xFF pair");
+}
+
 void test_rejections_and_options(const std::filesystem::path& sample) {
     bool rejected = false;
     try {
@@ -107,13 +140,16 @@ void test_rejections_and_options(const std::filesystem::path& sample) {
     }
     check(rejected, "an unmapped code page did not throw");
 
-    if (sample.empty()) {
+    // The table/decoder assertions above need no file. The open-path checks below need the Jet3
+    // sample; on machines (and fresh CI runners) without it, the argument is a non-existent
+    // default path, so skip those checks instead of failing on the missing file.
+    if (sample.empty() || !std::filesystem::exists(sample)) {
         return;
     }
     // The open path accepts the new overrides and still rejects unknown pages; names are ASCII so
     // a Jet3 file reads identically under any supported page.
     const std::filesystem::path& path = sample;
-    for (const std::uint16_t page : {std::uint16_t{936}, std::uint16_t{1251}}) {
+    for (const std::uint16_t page : {std::uint16_t{936}, std::uint16_t{1251}, std::uint16_t{932}}) {
         rea_jackcess::DatabaseOptions options;
         options.code_page = page;
         auto database = rea_jackcess::Database::open(path, options);
@@ -137,6 +173,8 @@ int main(int argc, char** argv) {
         test_single_byte_pages();
         test_gbk();
         test_gbk_malformed();
+        test_shift_jis();
+        test_shift_jis_malformed();
         test_rejections_and_options(argc > 1 ? std::filesystem::path(argv[1])
                                              : std::filesystem::path{});
         std::cout << "code page tables hold\n";
