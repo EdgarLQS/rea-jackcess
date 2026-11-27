@@ -44,11 +44,16 @@ std::vector<std::uint8_t> read_long_value_bytes(const PageFile& file,
                                                 const EncodedTableRow& row,
                                                 const ColumnDefinition& column);
 
+// Decodes one Jet4/ACE column cell into a public Value. `row` provides the column's raw bytes as
+// split by the row reader; `column` supplies the type. Decoder failures are reported through the
+// caller's ErrorHandler where one is set.
 Jet4Value decode_jet4_value(const PageFile& file,
                             const std::string& table_name,
                             const EncodedTableRow& row,
                             const ColumnDefinition& column);
 
+// Reads the decimal complex-value foreign key stored in a complex column cell, or nullopt when the
+// cell is NULL. `table_name` and `column` are used for error context.
 std::optional<std::int32_t> decode_jet4_complex_value_foreign_key(const PageFile& file,
                                                                   const std::string& table_name,
                                                                   const EncodedTableRow& row,

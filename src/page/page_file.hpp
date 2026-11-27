@@ -14,8 +14,11 @@
 
 namespace rea_jackcess::detail {
 
+// Open options for a PageFile.
 struct PageFileOptions {
+    // Forced legacy (Jet3) text code page; nullopt uses the format default.
     std::optional<std::uint16_t> code_page;
+    // Factory that supplies a page codec for an encoded database; empty means no decoding.
     PageCodecFactory codec;
 };
 

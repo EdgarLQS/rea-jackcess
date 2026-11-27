@@ -20,18 +20,29 @@ namespace detail {
 struct DatabaseState;
 }
 
+// A non-fatal problem found while describing a database (for example a table that could not be
+// described). Diagnostics do not abort the open; they are reported through Database::diagnostics().
 struct DatabaseDiagnostic {
+    // Table the diagnostic concerns, when applicable.
     std::optional<std::string> table_name;
+    // Human-readable description of the problem.
     std::string message;
+    // Page number involved, when the problem is page-scoped.
     std::optional<std::uint64_t> page_number;
 };
 
-enum class LinkedTableKind { file, odbc };
+// Kind of linked (external) table reference.
+enum class LinkedTableKind { file, odbc }; // file = link to another Access file; odbc = link via ODBC.
 
+// Stored metadata of a linked table, as read from the system catalog (the target is not opened).
 struct LinkedTableInfo {
+    // Link name as it appears in the database.
     std::string name;
+    // Whether the link targets a file or an ODBC source.
     LinkedTableKind kind;
+    // Stored target database path (file links) or DSN/database (ODBC), if recorded.
     std::optional<std::string> target_database;
+    // Stored name of the table inside the target database.
     std::optional<std::string> target_table;
     // Stored ODBC connection text may contain credentials.
     std::optional<std::string> connection_string;
@@ -70,29 +81,44 @@ using CustomLinkedSourceResolver = std::function<std::shared_ptr<CustomLinkedSou
 using LinkedTableResolver = std::function<std::filesystem::path(
     const std::filesystem::path& source, const LinkedTableInfo& link)>;
 
+// Access mode requested when opening an existing database.
 enum class DatabaseOpenMode {
-    read_only,
-    read_write,
+    read_only,  // No pages are written; no lock is taken.
+    read_write, // Writes are allowed; takes an exclusive advisory lock on the file.
 };
 
+// Join type of a relationship between two tables.
 enum class RelationshipJoinType { inner, left_outer, right_outer };
 
+// One column mapping of a relationship (parent column -> child column).
 struct RelationshipColumnInfo {
+    // Column on the parent (referenced) table.
     std::string from_column;
+    // Column on the child (referencing) table.
     std::string to_column;
 };
 
+// One relationship (foreign-key link between two local tables) read from the database.
 struct RelationshipInfo {
+    // Relationship name.
     std::string name;
+    // Parent (referenced) table name.
     std::string from_table;
+    // Child (referencing) table name.
     std::string to_table;
+    // The column mappings in order.
     std::vector<RelationshipColumnInfo> columns;
+    // Raw relationship flags word as stored.
     std::uint32_t raw_flags;
+    // True for a one-to-one relationship.
     bool one_to_one;
+    // True when referential integrity is enforced.
     bool referential_integrity;
+    // Cascade actions declared on the relationship.
     bool cascade_updates;
     bool cascade_deletes;
     bool cascade_null_on_delete;
+    // Relationship join type.
     RelationshipJoinType join_type;
 };
 
@@ -104,13 +130,18 @@ public:
     RelationshipBuilder(std::string name, std::string from_table, std::string to_table);
 
     // The parent column comes first, the child column second, in mapping order.
+    // @param from_column parent (referenced) column name.
+    // @param to_column child (referencing) column name.
     RelationshipBuilder& add_columns(std::string from_column, std::string to_column);
+    // Enables/disables referential integrity (the optional flag sets the state; default true).
     RelationshipBuilder& with_referential_integrity(bool enabled = true);
     RelationshipBuilder& with_cascade_updates(bool enabled = true);
     RelationshipBuilder& with_cascade_deletes(bool enabled = true);
     RelationshipBuilder& with_cascade_null_on_delete(bool enabled = true);
+    // Sets the relationship's join type (inner / left outer / right outer).
     RelationshipBuilder& with_join_type(RelationshipJoinType join_type);
 
+    // Accessors for the declared relationship.
     const std::string& name() const noexcept;
     const std::string& from_table() const noexcept;
     const std::string& to_table() const noexcept;
@@ -135,6 +166,8 @@ private:
 
 // Accessors on a moved-from Database throw std::logic_error.
 // Options applied when a database is opened read-only.
+// A Database value is a lightweight handle to shared internal state; moving it transfers the
+// handle, and the last handle to be destroyed closes the file.
 struct DatabaseOptions {
     // Forces the code page used to decode legacy Jet3 text. 1252 (the default), 819/28591,
     // 936 (GBK), 932 (Shift-JIS) and 1251 are supported; any other value is rejected by the open
@@ -145,26 +178,35 @@ struct DatabaseOptions {
     PageCodecFactory page_codec;
 };
 
+// A handle to an open database. Copy operations are not provided; move transfers the handle.
 class Database {
 public:
     // Opens an existing Jet4 or ACE database read-only. Other formats remain unsupported here.
+    // @param path database file to open.
+    // @throws DatabaseError on I/O failure, an unsupported format, or a file needing a codec.
     static Database open(const std::filesystem::path& path);
 
     // Opens an existing Jet4 database with the requested access mode. ACE currently permits read-only mode only.
     // Read-write handles hold an exclusive advisory lock until all dependent handles are closed.
+    // @param path database file to open.
+    // @param mode read_only or read_write.
     static Database open(const std::filesystem::path& path, DatabaseOpenMode mode);
 
     // Opens a database whose bytes already live in memory. The buffer must contain the whole
     // file; the handle is read-only and reports "<memory>" as its path in diagnostics.
+    // @param bytes the complete file contents.
     static Database open(const std::vector<std::uint8_t>& bytes);
 
     // Read-only opens with explicit options.
+    // @param options code page / page codec settings.
     static Database open(const std::filesystem::path& path, DatabaseOptions options);
     static Database open(const std::vector<std::uint8_t>& bytes, DatabaseOptions options);
 
     // Creates a Jet4 database, then opens it for reading.
     // Replacing an existing file fails while it has an active read-write handle.
     // Concurrent calls to either create overload targeting the same path must be serialized by the caller.
+    // @param path destination file (created or replaced).
+    // @param format v2000 or v2003.
     static Database create(const std::filesystem::path& path, DatabaseFormat format);
 
     // Creates a Jet4 V2000 or V2003 database with the supplied empty table schemas, then opens it for reading.
@@ -172,12 +214,18 @@ public:
     // fits one page (MONEY uses four decimal places; TEXT defaults to 255 UTF-16 characters and BINARY to 255 bytes),
     // and 1-64 character ASCII names containing letters, digits, spaces, or underscores.
     // The returned Database handle remains read-only.
+    // @param path destination file.
+    // @param format v2000 or v2003.
+    // @param tables the empty tables to create (columns and initial indexes).
     static Database create(const std::filesystem::path& path,
                            DatabaseFormat format,
                            const std::vector<TableBuilder>& tables);
 
+    // Database file path ("<memory>" for an in-memory open).
     const std::filesystem::path& path() const;
+    // Format metadata (engine version, page size, read-only).
     const FormatInfo& format() const;
+    // Jackcess-style finer format classification.
     FileFormat file_format() const;
     // Diagnostics include tables that could not be described, such as linked tables.
     const std::vector<DatabaseDiagnostic>& diagnostics() const;
@@ -215,9 +263,11 @@ public:
     std::vector<QueryInfo> queries() const;
 
     // Reads Jet4 relationships whose two endpoints are available as local tables.
+    // @param include_system_tables include relationships involving system tables.
     std::vector<RelationshipInfo> relationships(bool include_system_tables = false) const;
     // Declares a relationship on a read-write handle: it appends the two index descriptors and
     // the MSysRelationships rows. The child must already index its foreign key columns.
+    // @param relationship the relationship to create (endpoints, column pairs, flags).
     void create_relationship(const RelationshipBuilder& relationship);
 
 private:

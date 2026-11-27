@@ -13,18 +13,20 @@
 
 namespace rea_jackcess::detail {
 
+// One entry to insert into or remove from an index tree.
 struct Jet4IndexEntry {
-    std::vector<std::uint8_t> key;
-    std::uint32_t row_page_number = 0;
-    std::uint8_t row_number = 0;
+    std::vector<std::uint8_t> key;    // Encoded index key bytes (empty for an all-NULL key).
+    std::uint32_t row_page_number = 0; // Data page of the referenced table row.
+    std::uint8_t row_number = 0;       // Row slot of the referenced table row.
     // Node entries point at a child index page; leaf entries leave this zero.
     std::uint32_t child_page_number = 0;
-    bool all_columns_null = false;
+    bool all_columns_null = false;     // True when every key column is NULL (affects uniqueness).
 };
 
+// A page image produced by an index operation, ready to be written.
 struct Jet4IndexPageWrite {
-    std::uint64_t page_number;
-    std::vector<std::uint8_t> bytes;
+    std::uint64_t page_number;       // Page to overwrite.
+    std::vector<std::uint8_t> bytes; // Full new page contents.
 };
 
 struct Jet4IndexApplyResult {
@@ -41,7 +43,9 @@ struct Jet4IndexApplyResult {
 };
 
 // Single-column key support for both index directions, including the stored text sort order.
+// True when `sort_order` names a collation the writer can encode keys for.
 bool jet4_text_sort_order_supported(const Jet4TextSortOrder& sort_order) noexcept;
+// True when the writer can build index keys for `column` (supported type and collation).
 bool jet4_index_key_supported(const ColumnDefinition& column) noexcept;
 inline constexpr std::size_t jet4_max_index_key_length = 510;
 

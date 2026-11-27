@@ -10,13 +10,15 @@
 
 namespace rea_jackcess::detail {
 
+// Physical location of a table row referenced by an index entry.
 struct IndexRowLocation {
-    std::uint32_t page_number;
-    std::uint16_t row_number;
+    std::uint32_t page_number;  // Data page holding the row.
+    std::uint16_t row_number;   // Row slot within that page.
 };
 
+// One index entry: where the row lives and the encoded key that ordered it.
 struct IndexEntryRecord {
-    IndexRowLocation row;
+    IndexRowLocation row; // Physical location of the referenced row.
     // Raw ascending entry key bytes, so callers can compare against an encoded search key.
     std::vector<std::uint8_t> key;
 };
@@ -44,7 +46,9 @@ public:
     IndexEntryCursor(const IndexEntryCursor&) = delete;
     IndexEntryCursor& operator=(const IndexEntryCursor&) = delete;
 
+    // Returns the referenced row of the next entry, or nullopt at the end of the scan.
     std::optional<IndexRowLocation> next();
+    // Returns the next entry including its encoded key, or nullopt at the end of the scan.
     std::optional<IndexEntryRecord> next_entry();
 
 private:

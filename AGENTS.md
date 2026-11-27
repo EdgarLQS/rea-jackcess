@@ -20,6 +20,10 @@
 - 唯一例外是已入库的真实样本 `test_data_only_read/test_mdb.mdb`：`tests/real_sample_test.cpp` 固定其 SHA-256，不得替换或再新增同类样本。仓库已公开，该样本随之可见；对外发布前按 `test_data_only_read/README.md` 的说明评估脱敏或替换。
 - 上游版本升级按工作包的同步流程执行；不要在未完成差异评审和回归前更换 5.2.0 基线。
 
+## 注释约定
+
+公开 API 与内部头文件（`include/rea_jackcess/**/*.hpp`、`src/**/*.hpp`）使用英文 Doxygen 风格注释：`///` 块写在声明上方，逐项给出作用、每个参数含义、返回值与抛出（`DatabaseErrorCode` 或标准异常）；结构体/枚举的每个成员用 `//` 说明含义、单位和编码（如 "UTF-16 code units"、"page number"、"UTF-8 text"）。注释必须与实现一致——写前对照对应 `.cpp`，不臆测字段语义。
+
 ## 构建与验证
 
 本地构建和 CTest 命令：
