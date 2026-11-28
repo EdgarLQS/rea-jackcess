@@ -1,10 +1,14 @@
 #include "rea_jackcess/csv.hpp"
 #include "rea_jackcess/database.hpp"
 
+#include "page/data_page.hpp"
+#include "page/page_file.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <sstream>
@@ -253,6 +257,99 @@ void test_unsupported_complex_reference_export(const std::filesystem::path& fixt
           "an unsupported scalar value was not rejected before CSV output");
 }
 
+// The upstream ACE fixture stores every complex foreign key. To exercise a NULL complex cell, copy
+// the fixture and clear the row NULL-mask bit for `multi-value-data` on the first row. The mask
+// layout and the bit semantics (set = value present) are the same ones the row reader decodes, so
+// this produces the wire form a writer would emit when the column is left unset.
+void create_null_complex_fixture(const std::filesystem::path& source,
+                                 const std::filesystem::path& target) {
+    std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing);
+
+    rea_jackcess::RowId row_id{};
+    std::size_t column_index = 0;
+    {
+        const auto database = Database::open(source);
+        const auto table = named_table(database, "Table1");
+        const auto& columns = table.columns();
+        const auto column = std::find_if(columns.begin(), columns.end(), [](const auto& candidate) {
+            return candidate.name == "multi-value-data";
+        });
+        check(column != columns.end() && column->type == DataType::complex,
+              "the fixed ACE sample no longer exposes multi-value-data as a complex column");
+        column_index = static_cast<std::size_t>(column - columns.begin());
+        check(column_index == 4, "the fixed ACE sample changed its complex column order");
+
+        auto cursor = table.rows();
+        const auto row = cursor.next();
+        const auto* id = row ? std::get_if<std::string>(&row->at(0)) : nullptr;
+        check(row.has_value() && id != nullptr && *id == "row1",
+              "the fixed ACE sample changed its first row");
+        check(std::get_if<std::int32_t>(&row->at(column_index)) != nullptr,
+              "the first fixed ACE row has no multi-value foreign key to clear");
+        row_id = row->id();
+    }
+
+    const auto file = rea_jackcess::detail::PageFile::open(source);
+    auto page = file.read_page(row_id.page_number);
+    const auto parsed =
+        rea_jackcess::detail::parse_data_page(file, row_id.page_number, page);
+    const rea_jackcess::detail::DataPageRow* stored = nullptr;
+    for (const auto& row : parsed.rows) {
+        if (row.row_number == row_id.row_number) {
+            stored = &row;
+            break;
+        }
+    }
+    check(stored != nullptr && !stored->overflow,
+          "the fixed ACE sample stores its first row in an unexpected slot");
+    const auto length = static_cast<std::size_t>(stored->end_offset - stored->start_offset);
+    check(stored->bytes.size() == length,
+          "the fixed ACE sample stores its first row with an overflow body");
+    const auto null_byte = static_cast<std::size_t>(stored->start_offset) + length - 1;
+    page[null_byte] &= static_cast<std::uint8_t>(~(1u << (column_index % 8)));
+
+    std::fstream output(target, std::ios::in | std::ios::out | std::ios::binary);
+    output.seekp(static_cast<std::streamoff>(row_id.page_number * file.format().page_size));
+    output.write(reinterpret_cast<const char*>(page.data()),
+                 static_cast<std::streamsize>(page.size()));
+    output.flush();
+    check(static_cast<bool>(output), "could not write the NULL complex fixture");
+}
+
+void test_null_complex_reference_export(const std::filesystem::path& fixture) {
+    TemporaryDirectory directory;
+    const auto patched = directory.file("complex-null.accdb");
+    create_null_complex_fixture(fixture, patched);
+
+    const auto database = Database::open(patched);
+    const auto table = named_table(database, "Table1");
+
+    auto cursor = table.rows();
+    const auto first = cursor.next();
+    check(first && std::holds_alternative<std::monostate>(first->at(4)),
+          "the patched row did not decode its multi-value foreign key as NULL");
+    const auto* attachment = std::get_if<std::int32_t>(&first->at(5));
+    check(attachment != nullptr && *attachment == 1,
+          "clearing one complex column changed the neighbouring attachment foreign key");
+
+    std::ostringstream exported;
+    rea_jackcess::export_table_csv(table, exported);
+    check(exported.str() ==
+              "row1,1,,,,1\n"
+              "row2,2,row2-memo,row2-memo,2,2\n"
+              "row3,3,row3-memo,row3-memo-again,3,3\n"
+              "row4,4,row4-memo,row4-memo,4,4\n",
+          "a NULL complex foreign key did not export as an empty field:\n" + exported.str());
+
+    CsvOptions options;
+    options.header = true;
+    options.columns = {"id", "multi-value-data", "attach-data"};
+    std::ostringstream projected;
+    rea_jackcess::export_table_csv(table, projected, options);
+    check(projected.str() == "id,multi-value-data,attach-data\nrow1,,1\nrow2,2,2\nrow3,3,3\nrow4,4,4\n",
+          "the projected NULL complex CSV differs:\n" + projected.str());
+}
+
 void test_import_round_trip(const std::filesystem::path& directory) {
     const auto path = directory / "import.mdb";
     Database::create(path, DatabaseFormat::v2000, {types_schema()});
@@ -384,12 +481,19 @@ void test_errors(const std::filesystem::path& directory) {
 
 int main(int argc, char** argv) {
     try {
+        if (argc == 4 && std::string(argv[1]) == "complex-null-fixture") {
+            create_null_complex_fixture(argv[2], argv[3]);
+            std::cout << "wrote a NULL complex fixture to " << argv[3] << '\n';
+            return 0;
+        }
         if (argc == 3) {
             const std::string mode = argv[1];
             if (mode == "complex") {
                 test_complex_reference_export(argv[2]);
             } else if (mode == "unsupported-complex") {
                 test_unsupported_complex_reference_export(argv[2]);
+            } else if (mode == "complex-null") {
+                test_null_complex_reference_export(argv[2]);
             } else {
                 throw std::invalid_argument("unknown CSV test mode: " + mode);
             }
@@ -397,7 +501,9 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (argc != 1) {
-            throw std::invalid_argument("usage: rea_jackcess_csv_tests [complex|unsupported-complex fixture]");
+            throw std::invalid_argument(
+                "usage: rea_jackcess_csv_tests [complex|unsupported-complex|complex-null fixture] "
+                "| complex-null-fixture <source> <target>");
         }
         TemporaryDirectory directory;
         test_export_matches_baseline(directory.path());

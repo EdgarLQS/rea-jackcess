@@ -614,7 +614,14 @@ void assert_sample_layers_match_core_catalogs(const std::vector<Table>& core_tab
                 spatial_reference_text.at(*expected.spatial_reference_id);
         }
 
-        const Table& core_table = require_table(core_tables, expected.table_name);
+        const auto core_table_it =
+            std::find_if(core_tables.begin(), core_tables.end(), [&](const auto& candidate) {
+                return ascii_equal_ignore_case(candidate.name(), expected.table_name);
+            });
+        check(core_table_it != core_tables.end(),
+              "sample Feature Class has no core table " + expected.table_name);
+        const Table& core_table = *core_table_it;
+        expected.table_name = core_table.name();
         const auto& columns = core_table.columns();
         const auto object_id = std::find_if(columns.begin(), columns.end(), [](const auto& column) {
             return ascii_equal_ignore_case(column.name, "OBJECTID");
@@ -663,20 +670,10 @@ void assert_sample_layers_match_core_catalogs(const std::vector<Table>& core_tab
     }
 }
 
-void test_pinned_sample(const std::filesystem::path& path) {
-    check(rea_jackcess::detail::sha256_file_hex(path) == sample_sha256,
-          "PGeo sample does not match its pinned SHA-256");
-    const auto database = Database::open(path);
-    const auto core_tables = database.tables();
-    const auto dataset = Dataset::open(path);
-    check(dataset.layers().size() == 17,
-          "PGeo sample did not expose exactly 17 Feature Classes");
-    check(std::none_of(dataset.layers().begin(), dataset.layers().end(), [](const auto& layer) {
-              return layer.table_name == "GDB_Items";
-          }),
-          "PGeo catalog table was incorrectly exposed as a feature layer");
-    assert_sample_layers_match_core_catalogs(core_tables, dataset);
-
+void assert_features_match_core(const std::vector<Table>& core_tables,
+                                const Dataset& dataset,
+                                std::size_t expected_features,
+                                std::size_t expected_nonempty_shapes) {
     std::size_t feature_count = 0;
     std::size_t nonempty_shapes = 0;
     for (const auto& layer : dataset.layers()) {
@@ -723,8 +720,24 @@ void test_pinned_sample(const std::filesystem::path& path) {
         }
         check(!core_cursor.next(), "PGeo adapter omitted a core table row");
     }
-    check(feature_count == 30 && nonempty_shapes == 30,
+    check(feature_count == expected_features && nonempty_shapes == expected_nonempty_shapes,
           "PGeo sample feature count or raw SHAPE payloads changed");
+}
+
+void test_pinned_sample(const std::filesystem::path& path) {
+    check(rea_jackcess::detail::sha256_file_hex(path) == sample_sha256,
+          "PGeo sample does not match its pinned SHA-256");
+    const auto database = Database::open(path);
+    const auto core_tables = database.tables();
+    const auto dataset = Dataset::open(path);
+    check(dataset.layers().size() == 17,
+          "PGeo sample did not expose exactly 17 Feature Classes");
+    check(std::none_of(dataset.layers().begin(), dataset.layers().end(), [](const auto& layer) {
+              return layer.table_name == "GDB_Items";
+          }),
+          "PGeo catalog table was incorrectly exposed as a feature layer");
+    assert_sample_layers_match_core_catalogs(core_tables, dataset);
+    assert_features_match_core(core_tables, dataset, 30, 30);
 
     const auto point_layer = std::find_if(dataset.layers().begin(),
                                           dataset.layers().end(),
@@ -745,12 +758,60 @@ void test_pinned_sample(const std::filesystem::path& path) {
           "PGeo reader changed the source sample");
 }
 
+// GDAL's public autotest corpus at tag v3.10.0 (autotest/ogr/data/pgeo/sample.mdb, MIT-licensed
+// repository). It uses the GDB_Items catalog layout and carries valid spatial references, unlike
+// the tracked Chinese PGeo sample.
+constexpr const char* gdal_sample_sha256 =
+    "f126ec09aa8bfc305a6dd62898f359a28630883adf17673c82ef9944b6766dae";
+
+void test_gdal_sample(const std::filesystem::path& path) {
+    check(rea_jackcess::detail::sha256_file_hex(path) == gdal_sample_sha256,
+          "GDAL PGeo sample does not match its pinned SHA-256");
+    const auto database = Database::open(path);
+    check(database.file_format() == rea_jackcess::FileFormat::v2003,
+          "GDAL PGeo sample is not classified as an Access 2003 Jet4 database");
+    const auto core_tables = database.tables();
+    const auto dataset = Dataset::open(path);
+    check(dataset.layers().size() == 3,
+          "GDAL PGeo sample did not expose exactly three Feature Classes");
+    check(std::none_of(dataset.layers().begin(), dataset.layers().end(), [](const auto& layer) {
+              return layer.table_name == "GDB_Items" || layer.table_name == "non_spatial";
+          }),
+          "GDAL PGeo catalog or non-spatial table was exposed as a feature layer");
+    assert_sample_layers_match_core_catalogs(core_tables, dataset);
+
+    const std::vector<std::string> expected_names{"lines", "points", "polys"};
+    check(std::equal(dataset.layers().begin(), dataset.layers().end(), expected_names.begin(),
+                     [](const auto& layer, const std::string& name) {
+                         return layer.name == name && layer.table_name == name;
+                     }),
+          "GDAL PGeo layer order, name or physical table changed");
+
+    std::map<std::string, std::size_t> expected_rows{{"lines", 6}, {"points", 17}, {"polys", 10}};
+    for (const auto& layer : dataset.layers()) {
+        check(layer.spatial_reference_id.has_value() && layer.spatial_reference &&
+                  layer.spatial_reference->definition.has_value(),
+              "GDAL PGeo layer did not resolve its spatial reference");
+        auto reader = dataset.open_layer(layer.name);
+        std::size_t rows = 0;
+        while (reader.next()) {
+            ++rows;
+        }
+        check(rows == expected_rows.at(layer.name),
+              "GDAL PGeo layer row count changed for " + layer.name);
+    }
+    assert_features_match_core(core_tables, dataset, 33, 33);
+    check(rea_jackcess::detail::sha256_file_hex(path) == gdal_sample_sha256,
+          "PGeo reader changed the GDAL source sample");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     try {
-        if (argc == 2 && std::string(argv[1]) == "sample") {
-            std::cerr << "Usage: rea_jackcess_pgeo_tests sample <sample.mdb>\n";
+        if (argc == 2 && (std::string(argv[1]) == "sample" || std::string(argv[1]) == "external")) {
+            std::cerr << "Usage: rea_jackcess_pgeo_tests sample <sample.mdb>\n"
+                         "       rea_jackcess_pgeo_tests external <gdal-sample.mdb>\n";
             return 2;
         }
         test_non_pgeo_is_rejected();
@@ -758,8 +819,11 @@ int main(int argc, char** argv) {
         test_feature_classes_layout();
         if (argc == 3 && std::string(argv[1]) == "sample") {
             test_pinned_sample(argv[2]);
+        } else if (argc == 3 && std::string(argv[1]) == "external") {
+            test_gdal_sample(argv[2]);
         } else if (argc != 1) {
-            std::cerr << "Usage: rea_jackcess_pgeo_tests [sample <sample.mdb>]\n";
+            std::cerr << "Usage: rea_jackcess_pgeo_tests [sample <sample.mdb>] "
+                         "[external <gdal-sample.mdb>]\n";
             return 2;
         }
         std::cout << "PGeo layer reader passed\n";

@@ -13,7 +13,8 @@
 
 namespace {
 
-// Pinned PGeo sample kept outside version control; see plan/Jackcess-C++重写/04-P0基线核验记录.md.
+// Pinned tracked PGeo sample; see test_data_only_read/README.md and
+// plan/Jackcess-C++重写/04-P0基线核验记录.md.
 constexpr const char* pinned_sample_sha256 =
     "0bc0acb9c732de1e17c43c2d0a6019f7b5a62ccf83c5818a1bc42db7dbc460c6";
 
@@ -68,6 +69,8 @@ int main(int argc, char** argv) {
               "real sample hash does not match the pinned PGeo fixture");
 
         const auto database = rea_jackcess::Database::open(path);
+        check(database.file_format() == rea_jackcess::FileFormat::generic_jet4,
+              "real sample is not classified as generic Jet4");
         const auto tables = database.tables();
 
         {

@@ -106,6 +106,9 @@ add_test(NAME csv_complex_export
 add_test(NAME csv_unsupported_complex_export
     COMMAND rea_jackcess_csv_tests unsupported-complex
             "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/unsupported-fields-v2007.accdb")
+add_test(NAME csv_complex_null_export
+    COMMAND rea_jackcess_csv_tests complex-null
+            "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/complex-data-v2007.accdb")
 
 # SHORT_DATE_TIME is exercised on both Jet4 formats; the test builds its own databases.
 add_executable(rea_jackcess_date_time_tests date_time_test.cpp)
@@ -187,6 +190,25 @@ if(EXISTS "${REA_JACKCESS_PGEO_SAMPLE}")
         COMMAND rea_jackcess_real_sample_tests "${REA_JACKCESS_PGEO_SAMPLE}")
 endif()
 
+# Local-only Access-generated copies of the PGeo sample. They are gitignored, so a clean checkout
+# and CI simply do not register these cases. Point the cache variable at another directory to use
+# copies kept elsewhere.
+set(REA_JACKCESS_ACCESS_SAMPLE_DIR "${PROJECT_SOURCE_DIR}/test_data_only_read" CACHE PATH
+    "Directory containing local-only Access-generated PGeo sample copies")
+add_executable(rea_jackcess_access_version_tests access_version_read_test.cpp)
+target_link_libraries(rea_jackcess_access_version_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_access_version_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+foreach(access_sample "test_mdb_2000.mdb:v2000" "test_mdb_2003.mdb:v2003" "test_mdb_2003.accdb:v2007")
+    string(REPLACE ":" ";" access_parts "${access_sample}")
+    list(GET access_parts 0 access_file)
+    list(GET access_parts 1 access_format)
+    if(EXISTS "${REA_JACKCESS_ACCESS_SAMPLE_DIR}/${access_file}")
+        add_test(NAME access_version_${access_format}
+            COMMAND rea_jackcess_access_version_tests
+                    "${REA_JACKCESS_ACCESS_SAMPLE_DIR}/${access_file}" ${access_format})
+    endif()
+endforeach()
+
 add_executable(rea_jackcess_pgeo_tests pgeo_layer_reader_test.cpp)
 target_link_libraries(rea_jackcess_pgeo_tests PRIVATE rea_jackcess::pgeo)
 target_include_directories(rea_jackcess_pgeo_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
@@ -199,6 +221,13 @@ endif()
 if(EXISTS "${REA_JACKCESS_PGEO_SAMPLE}")
     add_test(NAME pgeo_sample_read
         COMMAND rea_jackcess_pgeo_tests sample "${REA_JACKCESS_PGEO_SAMPLE}")
+endif()
+# Second, independently sourced PGeo corpus (GDAL autotest data at a pinned tag). Local-only.
+set(REA_JACKCESS_GDAL_PGEO_SAMPLE
+    "${PROJECT_SOURCE_DIR}/test_data_only_read/gdal-pgeo-sample-v3.10.0.mdb")
+if(EXISTS "${REA_JACKCESS_GDAL_PGEO_SAMPLE}")
+    add_test(NAME pgeo_gdal_sample_read
+        COMMAND rea_jackcess_pgeo_tests external "${REA_JACKCESS_GDAL_PGEO_SAMPLE}")
 endif()
 
 # The composite-index fixtures follow the same generated-on-demand rule.
