@@ -1,7 +1,7 @@
 # 真实样本目录
 
-本目录只保留一个入库的真实数据库样本，用于在本机和 CI 上跑 `real_sample` 及与固定 Jackcess
-5.2.0 JAR 的全表对照。其他临时样本不要放进来。
+本目录只有 `test_mdb.mdb` 一个入库的真实数据库样本，用于在本机和 CI 上跑 `real_sample` 及与固定
+Jackcess 5.2.0 JAR 的全表对照；其余本地或下载样本均被 `.gitignore` 排除。
 
 | 文件 | 格式 | 字节 | SHA-256 |
 |---|---|---|---|
@@ -41,6 +41,29 @@
 - GDAL 仓库为 MIT 许可；该测试数据的再分发授权仍需在对外发布前复核，本仓库只登记来源与哈希，不提交文件。
 
 对应回归：`pgeo_gdal_sample_read`（文件存在时注册），断言 27 表、格式、图层顺序/行数、SRS 可用性，并按 OBJECTID 与核心表逐行核对属性与 SHAPE。固定 JAR 对照结果：`Compared 27 tables: schema and rows match.`、`Compared 3 PGeo layers and 33 features by OBJECTID.`
+
+### 上游公开语料（未入库）
+
+以下文件经 GitHub Contents API（`application/vnd.github.raw`）从公开仓库下载，放在本目录子文件夹中，**不入库**。它们用于补齐真实 Jet3 936/932 代码页、独立 ACE V2016/V2019 与真实加密库证据；下载文件的再分发授权仍需在对外发布前复核。
+
+| 文件 | 来源路径（固定分支 `master`/`main`） | 格式 | 字节 | SHA-256 |
+|---|---|---|---|---|
+| `upstream-jetdb/japaneseTestV1997.mdb` | `dominion525/jetdb` `testdata/V1997/` | Jet3，代码页 932 | 53,248 | `3b0c73573b770abf4149faa1187e193407ed6cc9c734bb680b3ddbef77e08210` |
+| `upstream-ucanaccess-v2/charsetGBK.mdb` | `spannm/ucanaccess` `src/test/resources/testdbs/` | Jet3，代码页 936 | 67,584 | `3c8d7d25e45df1bb23b988a0089ac1e88a6b62ff261ed0702024888abecfef89` |
+| `upstream-ucanaccess-v2/functionsV2016.accdb` | 同上 | ACE2016（22 表） | 405,504 | `31248687b75f28e7f8a233ae9b452121d455f5321d5c5f356328512d33ac1550` |
+| `upstream-jetdb/bigIntTestV2016.accdb` | `dominion525/jetdb` `testdata/V2016/` | ACE2016（BigInt） | 376,832 | `dba5d460bd8143c13c0dfb62a9030a7dd0b042b379fdea9bf84e72cfd31230eb` |
+| `upstream-jackcess-v2/empty2016.accdb` | `spannm/jackcess` `src/main/resources/io/github/spannm/jackcess/` | ACE2016（空库） | 364,544 | `cde272fdb4b1cbf467ec58883f68b2f45ef0000cd440e85a09961dd17eea5c81` |
+| `upstream-jackcess-v2/empty2019.accdb` | 同上 | ACE2019（空库） | 434,176 | `c20059a6924fcfe3480e1999544d59c7a9bb0b2e64648764187b26d0d90abd35` |
+| `upstream-jetdb/extDateTestV2019.accdb` | `dominion525/jetdb` `testdata/V2019/` | ACE2019（与仓内 `ext-date-v2019.accdb` 相同，均源自 `spannm/jackcess`） | 557,056 | `bb6d7af8e5275c1143b5f68447b2f96bd11e460fbec6856de7b3e339ccb53cf6` |
+| `upstream-jetdb/db2007-enc.accdb` | `dominion525/jetdb` `testdata/`（源自 jackcessencrypt） | ACE2010，Agile 加密，密码 `Test123` | 430,080 | `fa6cd4ed7639dee40ad288ff6c530356ea050bde36dbde5e4328fee6aa07f306` |
+| `upstream-jetdb/db2007-rc4cryptoapi.accdb` | 同上 | ACE2007，RC4 CryptoAPI | 434,176 | `174ba7ff6349d4f929adf555f5035c0722923776662f30a523f2933827d9558e` |
+| `upstream-jetdb/db2013-enc.accdb` | 同上 | ACE2010，Agile 加密 | 389,120 | `3e9ee219a7ca9bf7dee261f6455f298887603d41c82ea0c5bc06d8831f09637a` |
+
+- `dominion525/jetdb` 为 MIT OR Apache-2.0；其 `testdata/SOURCES.md` 说明 `japaneseTestV1997.mdb` 由 DAO 3.6 以 `dbLangJapanese`（`CP=932`）独立创建，`bigIntTestV2016.accdb` 由 Access for Microsoft 365 独立创建，V2019 文件复制自 Jackcess 上游。
+- `spannm/ucanaccess` 测试库的来源与许可需按其仓库说明复核；`charsetGBK.mdb` 的期望值由 `CharsetGBKTest` 固定为 `GBK编码`。
+- 加密库的密码仅登记 `db2007-enc.accdb`（`Test123`）；其余两份用于验证“有 EncryptionInfo、无 codec 时明确拒绝”，不用于解密。
+
+对应回归：`jet3_codepage_932`、`jet3_codepage_936`（文件存在时运行，缺失返回 77）。`japaneseTestV1997.mdb` 用 `--code-page 932` 读取 5 张表，表名/列名/索引名与三行文本及 MEMO 均与生成器说明一致，索引用 `氏名索引` 扫描得到 `Smith`、`ﾃｽﾄ`、`山田太郎`；与固定 JAR（`windows-31J`）逐表一致。`charsetGBK.mdb` 用 `--code-page 936` 读取 7 张表，`table1` 的 `GBK编码` 与固定 JAR（`GBK`）逐表一致，`PrimaryKey` 数值查找命中。两份样本对照前后哈希不变。
 
 ### 派生 NULL 复杂外键语料
 
