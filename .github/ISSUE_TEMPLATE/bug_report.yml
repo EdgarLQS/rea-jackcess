@@ -1,0 +1,70 @@
+name: Bug report
+description: Report a reproducible read/parse defect
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report suspected security vulnerabilities here. Follow SECURITY.md instead.
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Release tag or commit SHA.
+    validations:
+      required: true
+  - type: dropdown
+    id: format
+    attributes:
+      label: Database format
+      options:
+        - Jet3 (Access 97)
+        - Jet4 V2000
+        - Jet4 V2003
+        - Generic Jet4
+        - ACE V2007
+        - ACE V2010
+        - ACE V2016
+        - ACE V2019
+        - MSISAM
+        - PGeo
+        - Unknown
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform and toolchain
+      description: OS, architecture, compiler and CMake build type.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Commands, API calls, and a minimal file if it can be shared safely.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: Include the error code/message and any sanitizer or fuzzer output.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I am not reporting a security vulnerability.
+          required: true
+        - label: I have removed private or confidential data from the report.
+          required: true

@@ -69,6 +69,8 @@ jobs:
           javac -version
       - name: Build and test
         run: bash .github/scripts/ci.sh
+      - name: Install and consume the CMake package
+        run: bash tools/validation/check_install_package.sh build
       - name: Print the test log on failure
         if: failure()
         run: |
@@ -97,6 +99,8 @@ jobs:
       - uses: actions/checkout@v5
       - name: Build and test
         run: bash .github/scripts/ci.sh
+      - name: Install and consume the CMake package
+        run: bash tools/validation/check_install_package.sh build
       - name: Print the test log on failure
         if: failure()
         run: |

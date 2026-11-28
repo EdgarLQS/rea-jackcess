@@ -1,0 +1,34 @@
+rea-jackcess
+Copyright 2026 The rea-jackcess authors
+
+This product is an independent C++ reimplementation of the public behaviour of
+Jackcess. It is not affiliated with, endorsed by, or maintained by the Jackcess
+authors.
+
+This product contains material derived from Jackcess, originally by James
+Ahlborn and maintained by Markus Spann:
+
+    https://github.com/spannm/jackcess
+    Licensed under the Apache License, Version 2.0.
+
+The following files under third_party/jackcess-5.2.0/ are copied from the
+jackcess-5.2.0 tag (commit 6159c680933625ffa952334b5e0e6b24f37bfdfe) and are
+distributed under the Apache License, Version 2.0:
+
+    empty-v2000.mdb
+    empty-v2003.mdb
+    index_codes_genleg.txt
+    index_codes_ext_genleg.txt
+    index_codes_gen.txt
+    index_codes_ext_gen.txt
+    index_codes_gen_97.txt
+    index_mappings_ext_gen_97.txt
+
+See third_party/jackcess-5.2.0/README.md for their hashes and upstream paths.
+
+The core library links against zlib, which is distributed under the zlib
+license. zlib is not bundled in this repository; it is a build and runtime
+dependency supplied by the platform or by the user.
+
+Third-party test data downloaded for local validation is not part of this
+repository; see test_data_only_read/README.md for sources and licensing notes.

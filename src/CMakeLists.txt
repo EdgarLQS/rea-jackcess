@@ -5,8 +5,12 @@ target_compile_features(rea_jackcess PUBLIC cxx_std_17)
 set_target_properties(rea_jackcess PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}"
     CXX_EXTENSIONS OFF
+    EXPORT_NAME core
 )
-target_include_directories(rea_jackcess PUBLIC "${PROJECT_SOURCE_DIR}/include")
+target_include_directories(rea_jackcess PUBLIC
+    "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
+)
 
 set(rea_jackcess_template_dir "${PROJECT_SOURCE_DIR}/third_party/jackcess-5.2.0")
 set(rea_jackcess_v2000_template "${rea_jackcess_template_dir}/empty-v2000.mdb")

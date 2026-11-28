@@ -8,3 +8,5 @@
 /build-sanitizers/
 /build-release/
 /build-gcc/
+/build-fuzz/
+/fuzz-work/

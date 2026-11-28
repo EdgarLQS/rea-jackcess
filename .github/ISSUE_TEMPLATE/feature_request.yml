@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose a read-only capability or compatibility improvement
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: input
+    id: jackcess
+    attributes:
+      label: Corresponding Jackcess 5.2.0 behaviour
+      description: API, class, documentation section or upstream test that defines the expected behaviour.
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use case
+      description: What are you trying to read, and why is the current limitation blocking you?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Available samples or evidence
+      description: Describe sample provenance and licensing. Do not attach licensed or private databases without permission.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: This request is for read-only behaviour.
+          required: true
+        - label: I understand that write support, expression evaluation, geometry decoding and sample cloning are outside the current read-only scope.

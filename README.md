@@ -1,5 +1,7 @@
 # rea-jackcess
 
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 `rea-jackcess` 正在用 C++17 重写 Java [Jackcess](https://github.com/spannm/jackcess)，目标是原生 Linux x86_64 和 ARM64 核心库，按固定基线 Jackcess 5.2.0 对齐 Access MDB/ACCDB 的公开能力和可观察行为。首个里程碑是 Jet4 V2000/V2003 与 ACE V2007/V2010/V2016/V2019 普通库的只读验收。
 
 ## 当前状态
@@ -42,6 +44,23 @@ cmake --build build
 (cd build && ctest --output-on-failure)
 ./build/rea-jackcess --version
 ```
+
+安装后可供 CMake 和 pkg-config 下游使用：
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
+cmake --build build
+cmake --install build
+```
+
+```cmake
+find_package(rea_jackcess CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE rea_jackcess::core)
+```
+
+PGeo 适配器对应 `rea_jackcess::pgeo`。可用 `-DREA_JACKCESS_BUILD_CLI=OFF`、
+`-DREA_JACKCESS_BUILD_PGEO=OFF`、`-DREA_JACKCESS_INSTALL=OFF` 控制构建内容。Fuzz 目标默认不构建，
+见 [`fuzz/README.md`](fuzz/README.md)。
 
 Windows 只用于本机开发验证，不在发布平台范围内。使用 MSYS2 UCRT64 的 GCC 与 zlib，并把 `C:\msys64\ucrt64\bin` 放进 `PATH`（编译器子进程依赖其中的 DLL）：
 
@@ -103,3 +122,9 @@ C++ 以目录划分内部模块：公开接口使用 `rea_jackcess` 命名空间
 - [详细开发计划](plan/Jackcess-C++重写/06-待办清单.md)列出工作包优先级、依赖和验收命令。
 - [近期接口契约](plan/Jackcess-C++重写/08-接口契约.md)记录写入、属性、ACE 读取和链接源的签名及行为边界。
 - [AI 协作指南](AGENTS.md)说明从哪里查证、如何实施和记录结果。
+
+## 许可证与参与
+
+本项目以 [Apache License 2.0](LICENSE) 发布，并非 Jackcess 官方项目；上游归属和第三方资源见
+[`NOTICE`](NOTICE)。参与方式见 [`CONTRIBUTING.md`](CONTRIBUTING.md)；安全问题请按
+[`SECURITY.md`](SECURITY.md) 私下报告，不要提交公开 issue。

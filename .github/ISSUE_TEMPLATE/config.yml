@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/EdgarLQS/rea-jackcess/security/advisories/new
+    about: Report suspected vulnerabilities privately; do not open a public issue.
+  - name: Documentation and limitations
+    url: https://github.com/EdgarLQS/rea-jackcess/blob/read-only-v2/plan/Jackcess-C++重写/16-可读特性与已知差异.md
+    about: Check the known limitations before reporting a compatibility gap.

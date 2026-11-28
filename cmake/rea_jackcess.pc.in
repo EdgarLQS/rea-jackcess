@@ -1,0 +1,11 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: rea-jackcess
+Description: Read-only C++ reader for Microsoft Access MDB and ACCDB files
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -lrea_jackcess
+Libs.private: -lz
+Cflags: -I${includedir}

@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]*']
+
+permissions:
+  contents: read
+
+env:
+  VERSION: ${{ github.ref_name }}
+
+jobs:
+  package-linux-x86_64:
+    name: package-linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake ninja-build zlib1g-dev
+          version="${VERSION#v}"
+          prefix="$PWD/stage/usr"
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DBUILD_TESTING=OFF
+          cmake --build build -j"$(nproc)"
+          cmake --install build
+          pkg="rea-jackcess-${version}-linux-x86_64"
+          mkdir -p "dist/$pkg"
+          cp -a stage/usr/. "dist/$pkg/"
+          cp LICENSE NOTICE README.md "dist/$pkg/"
+          tar -C dist -czf "dist/$pkg.tar.gz" "$pkg"
+          (cd dist && sha256sum "$pkg.tar.gz" > "$pkg.tar.gz.sha256")
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-linux-x86_64
+          path: dist/
+          if-no-files-found: error
+
+  package-linux-arm64:
+    name: package-linux-arm64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build and install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake ninja-build zlib1g-dev
+          version="${VERSION#v}"
+          prefix="$PWD/stage/usr"
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DBUILD_TESTING=OFF
+          cmake --build build -j"$(nproc)"
+          cmake --install build
+          pkg="rea-jackcess-${version}-linux-arm64"
+          mkdir -p "dist/$pkg"
+          cp -a stage/usr/. "dist/$pkg/"
+          cp LICENSE NOTICE README.md "dist/$pkg/"
+          tar -C dist -czf "dist/$pkg.tar.gz" "$pkg"
+          (cd dist && sha256sum "$pkg.tar.gz" > "$pkg.tar.gz.sha256")
+      - uses: actions/upload-artifact@v6
+        with:
+          name: release-linux-arm64
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: publish-github-release
+    needs: [package-linux-x86_64, package-linux-arm64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+      - name: Add source archive and checksums
+        run: |
+          version="${VERSION#v}"
+          source="rea-jackcess-${version}-source.tar.gz"
+          git archive --format=tar.gz --prefix="rea-jackcess-${version}/" \
+            -o "dist/$source" HEAD
+          (cd dist && sha256sum "$source" > "$source.sha256")
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$VERSION" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "rea-jackcess $VERSION" \
+            --generate-notes \
+            --verify-tag
