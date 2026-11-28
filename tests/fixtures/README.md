@@ -226,6 +226,24 @@ opens. `ace2007_unsupported_complex` also checks that the upstream `UnknownCompl
 while its three ordinary table rows remain readable. The tests compare multi-value and version-history text/order, attachment metadata and decoded file data, unsupported-value counts and encoded unknown-field bytes, and ACE write rejection. A separate wrapper test covers raw payload decoding and malformed headers. The upstream source and broader complex-value expectations are recorded in the
 [`baseline record`](../../plan/Jackcess-C++重写/04-P0基线核验记录.md#2026-11-20-ace-复杂列样本与键关系).
 
+### NULL complex foreign key fixture
+
+The upstream samples store a foreign key for every complex cell. `csv_complex_null_export` derives a
+NULL-cell copy at run time and `csv_test complex-null-fixture` can write the same file for JAR
+comparison without committing a binary:
+
+```sh
+./build/tests/rea_jackcess_csv_tests complex-null-fixture \
+    tests/fixtures/complex-data-v2007.accdb build/fixtures/complex-null-v2007.accdb
+```
+
+The generator copies the fixture and clears the `multi-value-data` NULL-mask bit on `Table1` row 1,
+using the same mask semantics as the row reader. The expected SHA-256 is
+`4aa32c391aa8e4341aef7244ceb11b0b65f981833dba93ab2fb8a7a7d6731669`. The fixed JAR reads all 29
+tables identically and `ExportUtil` writes the same CSV content (CRLF vs LF differs only in line
+endings). Access 2024 and the fixed JAR public API both assign a fresh foreign key instead of NULL,
+so this derived fixture is documented as a legal NULL encoding rather than an Access save.
+
 ## ACE V2019 extended-date read fixture
 
 `ext-date-v2019.accdb` is the unchanged Jackcess 5.2.0 test resource `V2019/extDateV2019.accdb` (Apache License 2.0, 557,056 bytes, SHA-256 `bb6d7af8e5275c1143b5f68447b2f96bd11e460fbec6856de7b3e339ccb53cf6`). `ace2019_read` checks ACE V2019 recognition and reads `Table1.ID`, `DateExt`, and the stored result in calculated column `DateNormalCalc`. The fixed-JAR checker validates all nine rows, including NULL, nanosecond precision, and years 100, 1265, and 1765; calculated expressions are not evaluated. Newer system-table behavior remains outside this check. See [`JackcessExtendedDateCheck.java`](../../tools/validation/JackcessExtendedDateCheck.java).

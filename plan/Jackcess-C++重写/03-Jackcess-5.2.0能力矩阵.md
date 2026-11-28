@@ -16,7 +16,7 @@ Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b2
 | DB-02 | DatabaseBuilder.create，V2000 空库可重开 | Database::create / write | 已完成 | 通过 · C cli_create_v2000、database_create | W02 |
 | DB-03 | DatabaseBuilder.create，V2003 空库可重开 | 同 DB-02 | 已完成 | 通过 · C cli_create_v2003、database_create | W02 |
 | DB-04 | DatabaseBuilder.open，Jet3 只读数据访问 | 目录、表定义、行、索引与保存查询均已实现（只读）/ format、catalog、value、index、queries | 已完成 | 通过 · C jet3_read、jet3_table_definition、jet3_index_read、jet3_query_read；6 份样本与固定 JAR 全表一致，9 条查询 SQL 逐字一致 | W08 |
-| DB-05 | Generic Jet4 既有库打开及修改；创建拒绝 | Database / api，读取和写入边界待分格式核实 | 部分实现 | 未运行 · 独立 Generic Jet4 语料 | W02 |
+| DB-05 | Generic Jet4 既有库打开及修改；创建拒绝 | Database / api，读取和写入边界待分格式核实 | 已完成 | 通过 · C real_sample（`file_format()==generic_jet4`；GDB_SpatialRefs 副本插入/删除与索引往返）、22 份语料固定 JAR 全表对照；写打开仅限 Jet4 既有库，创建入口仅 V2000/V2003 | W02 |
 | DB-06 | Database 生命周期、自动同步、刷新与打开选项 | Database / api、page，写锁与日志已有，选项对齐待补 | 部分实现 | 通过 · C database_create、crash_recovery_v2000/v2003（写入与恢复切片） | W09 |
 | DB-07 | 默认 codec 拒绝编码页，MSISAM 识别，扩展处理器接入 | `PageCodec`/`DatabaseOptions::page_codec` 只读解码契约；`DatabaseFile::is_encoded`；format 读掩码后的编码键，page 逐页原地解码（页 0 原样）| 部分实现 | 通过 · C database_file（识别）、page_codec（置换样本：已配置 codec 解码全库并与原库逐行一致、内存打开一致、页 0 不进 codec、缺处理器与工厂拒答拒绝、MSISAM 容器拒绝、处理器异常与自带页号透传）；真实 Access 加密库对照未做 | W09 |
 | DB-08 | 文件通道和内存打开，字符集、时区及日期模式 | Database::open(bytes)、DatabaseOptions::code_page（1252/819/28591/936/1251/932）已实现；时区与日期模式按只读范围不适用（存储串无时区，格式化由调用方决定）/ Database、page | 已完成 | 通过 · C memory_open（内存与按路径一致、写入被拒、损坏缓冲）、database_options（代码页覆盖与不支持值拒绝）、code_page（936/1251/932 表的权威断言与非法序列语义；Jet3 样本打开覆盖） | W09 |
@@ -90,7 +90,7 @@ Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b2
 | ID | Jackcess 公开行为与格式 | REA 接口与位置 | 实现 | 验证与证据 | 工作包 |
 |---|---|---|---|---|---|
 | QU-01 | Database.getQueries / Query.toSQLString，V2000/V2003 固定样本 SQL 重建 | Database::queries、QueryInfo::to_sql / api | 已完成 | 通过 · C saved_query_v2000/v2003；J「保存查询的 SQL 重建」 | W10 |
-| IO-01 | ImportUtil/ExportUtil 普通表 CSV，含日期文本切片；复杂列导出其外键文本 | CSV 接口 / io；CLI `export`/`import` | 部分实现 | 通过 · C `csv_round_trip`、`csv_complex_export`（多值/附件/版本历史以十进制外键输出并过滤，逐字匹配固定 5.2.0 JAR）、`csv_unsupported_complex_export`（未知复杂类型输出外键、未知标量明确拒绝；`b2e6b1e`）、`cli_csv_export`（`--header` 生效、未知选项退出码 2）；CLI 全表导出与固定 JAR `ExportUtil` 在 V2007/V2010 样本上逐字一致；暂无 NULL 复杂外键样本 | W10 |
+| IO-01 | ImportUtil/ExportUtil 普通表 CSV，含日期文本切片；复杂列导出其外键文本 | CSV 接口 / io；CLI `export`/`import` | 已完成 | 通过 · C `csv_round_trip`、`csv_complex_export`（多值/附件/版本历史以十进制外键输出并过滤，逐字匹配固定 5.2.0 JAR）、`csv_complex_null_export`（派生 NULL 复杂外键样本，全表与投影 CSV 空字段，JAR 29 表与 CSV 内容一致）、`csv_unsupported_complex_export`（未知复杂类型输出外键、未知标量明确拒绝；`b2e6b1e`）、`cli_csv_export`（`--header` 生效、未知选项退出码 2）；CLI 全表导出与固定 JAR `ExportUtil` 在 V2007/V2010/NULL 样本上逐字一致 | W10 |
 | EX-01 | ErrorHandler、ColumnValidator、ColumnMatcher 扩展点 | Database、Table、RowCursor / api；错误码与上下文映射见[错误分类](14-只读错误分类与上下文.md) | 部分实现 | 通过 · C database_create、cursor_v2000/v2003、error_context（七类码的可依赖字段与表/列上下文）；复杂值匹配的自定义异常仍原样透传 | W10 |
 
 **额外能力判定。** Jackcess 5.2.0 的 `Database::getQueries` 和 `Query::toSQLString` 提供查询定义及 SQL 文本。通用 SQL 执行属于额外能力，单独决策；PR-04 的表达式求值保留在核心对齐范围。
