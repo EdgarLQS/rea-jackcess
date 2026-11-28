@@ -15,8 +15,8 @@ Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b2
 | DB-01 | DatabaseBuilder 识别 Jet3、Jet4、ACE、MSISAM 格式头 | DatabaseFile / format | 已完成 | 通过 · C database_file（头识别） | W02 |
 | DB-02 | DatabaseBuilder.create，V2000 空库可重开 | Database::create / write | 已完成 | 通过 · C cli_create_v2000、database_create | W02 |
 | DB-03 | DatabaseBuilder.create，V2003 空库可重开 | 同 DB-02 | 已完成 | 通过 · C cli_create_v2003、database_create | W02 |
-| DB-04 | DatabaseBuilder.open，Jet3 只读数据访问 | 目录、表定义、行、索引与保存查询均已实现（只读）/ format、catalog、value、index、queries | 已完成 | 通过 · C jet3_read、jet3_table_definition、jet3_index_read、jet3_query_read；6 份样本与固定 JAR 全表一致，9 条查询 SQL 逐字一致；真实 936/932 库（UCanAccess `charsetGBK.mdb`、jetdb `japaneseTestV1997.mdb`）分别 7/5 表与固定 JAR 一致，C jet3_codepage_932/936 覆盖表名、文本、索引扫描与主键查找 | W08 |
-| DB-05 | Generic Jet4 既有库打开及修改；创建拒绝 | Database / api，读取和写入边界待分格式核实 | 已完成 | 通过 · C real_sample（`file_format()==generic_jet4`；GDB_SpatialRefs 副本插入/删除与索引往返）、28 份语料固定 JAR 全表对照；写打开仅限 Jet4 既有库，创建入口仅 V2000/V2003 | W02 |
+| DB-04 | DatabaseBuilder.open，Jet3 只读数据访问 | 目录、表定义、行、索引与保存查询均已实现（只读）/ format、catalog、value、index、queries | 已完成 | 通过 · C jet3_read、jet3_table_definition、jet3_index_read、jet3_query_read；6 份样本与固定 JAR 全表一致，9 条查询 SQL 逐字一致；真实 936/932 库（UCanAccess `charsetGBK.mdb`、jetdb `japaneseTestV1997.mdb`、jackcess-dotnet `access97-cp932.mdb`）分别 7/5/5 表与固定 JAR 一致，C jet3_codepage_932/936 覆盖表名、文本、索引扫描与主键查找 | W08 |
+| DB-05 | Generic Jet4 既有库打开及修改；创建拒绝 | Database / api，读取和写入边界待分格式核实 | 已完成 | 通过 · C real_sample（`file_format()==generic_jet4`；GDB_SpatialRefs 副本插入/删除与索引往返）、30 份语料固定 JAR 全表对照；写打开仅限 Jet4 既有库，创建入口仅 V2000/V2003 | W02 |
 | DB-06 | Database 生命周期、自动同步、刷新与打开选项 | Database / api、page，写锁与日志已有，选项对齐待补 | 部分实现 | 通过 · C database_create、crash_recovery_v2000/v2003（写入与恢复切片） | W09 |
 | DB-07 | 默认 codec 拒绝编码页，MSISAM 识别，扩展处理器接入 | `PageCodec`/`DatabaseOptions::page_codec` 只读解码契约；`DatabaseFile::is_encoded`；format 读掩码后的编码键，page 逐页原地解码（页 0 原样）| 部分实现 | 通过 · C database_file（识别）、page_codec（置换样本：已配置 codec 解码全库并与原库逐行一致、内存打开一致、页 0 不进 codec、缺处理器与工厂拒答拒绝、MSISAM 容器拒绝、ACE `EncryptionInfo` 拒绝、处理器异常与自带页号透传）；三份真实加密库（Agile/RC4 CryptoAPI）`DatabaseFile::is_encoded()==true`、无 codec 时 `Database::open` 报 `unsupported_operation`；页解密实现未做 | W09 |
 | DB-08 | 文件通道和内存打开，字符集、时区及日期模式 | Database::open(bytes)、DatabaseOptions::code_page（1252/819/28591/936/1251/932）已实现；时区与日期模式按只读范围不适用（存储串无时区，格式化由调用方决定）/ Database、page | 已完成 | 通过 · C memory_open（内存与按路径一致、写入被拒、损坏缓冲）、database_options（代码页覆盖与不支持值拒绝）、code_page（936/1251/932 表的权威断言与非法序列语义；Jet3 样本打开覆盖） | W09 |
@@ -79,8 +79,8 @@ Jackcess 标签 `jackcess-5.2.0`，源码提交 `6159c680933625ffa952334b5e0e6b2
 | AC-06 | V2010 固定样本计算列逻辑类型及已存结果 | ColumnInfo、Table::rows / catalog、value | 已完成 | 通过 · C ace2010_calculated_fields；J「ResultType 与已存结果读取」 | W05 |
 | AC-07 | V2019 固定样本扩展日期值（NULL、纳秒及历史日期） | Table::rows / value | 已完成 | 通过 · C ace2019_read；J「扩展日期与计算列结果读取」 | W05 |
 | AC-08 | V2019 固定样本计算日期列已存结果 | Table::rows / catalog、value | 已完成 | 通过 · C ace2019_read；同 AC-07 的 J 记录 | W05 |
-| AC-09 | V2016 普通表和 V2019 扩展语料读取 | Database、Table / format、catalog | 已完成 | 通过 · C ace_extra_read_v2016/v2019（固定 JAR 生成语料；独立来源待补）；`MSysResources.Data` 复合外键按 LONG 读出 | W05 |
-| AC-10 | 非标记 LONG 外键回退和异常关联结构 | Table::complex_values / catalog、api | 部分实现 | 通过 · C catalog（合成回退）；真实样本未运行 | W05 |
+| AC-09 | V2016 普通表和 V2019 扩展语料读取 | Database、Table / format、catalog | 已完成 | 通过 · C ace_extra_read_v2016/v2019（固定 JAR 生成语料）；独立 UCanAccess/jetdb V2016 与 jackcess-dotnet V2019（BIGINT/EXT_DATE_TIME）语料均与固定 JAR 全表一致；`MSysResources.Data` 复合外键按 LONG 读出 | W05 |
+| AC-10 | 非标记 LONG 外键回退和异常关联结构 | Table::complex_values / catalog、api | 部分实现 | 通过 · C catalog（合成回退）；公开 ACE 语料检索均带 `COMPLEX_FK` 标记，真实非标记样本仍未运行 | W05 |
 | AC-11 | V2007/V2010/V2016/V2019 创建及既有库普通行写入 | Database、Table / write；当前拒绝 ACE 写打开 | 未实现 | 未运行 · 写入 | W06 |
 | AC-12 | 复杂值附件、多值和版本历史的写入操作 | ComplexValueInfo / api、write | 未实现 | 未运行 · 写入 | W07 |
 | AC-13 | OleBlob 包装、流式读取及资源生命周期 | OleStream / Table::ole_stream 只读取流（seek/read/read_range） | 已完成 | 通过 · C attachment_value（解码）、ole_stream（9000 字节跨页 OLE 的顺序读、定位读、尾部截断与非 OLE 列拒绝） | W09 |

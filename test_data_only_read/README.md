@@ -58,12 +58,16 @@ Jackcess 5.2.0 JAR 的全表对照；其余本地或下载样本均被 `.gitigno
 | `upstream-jetdb/db2007-enc.accdb` | `dominion525/jetdb` `testdata/`（源自 jackcessencrypt） | ACE2010，Agile 加密，密码 `Test123` | 430,080 | `fa6cd4ed7639dee40ad288ff6c530356ea050bde36dbde5e4328fee6aa07f306` |
 | `upstream-jetdb/db2007-rc4cryptoapi.accdb` | 同上 | ACE2007，RC4 CryptoAPI | 434,176 | `174ba7ff6349d4f929adf555f5035c0722923776662f30a523f2933827d9558e` |
 | `upstream-jetdb/db2013-enc.accdb` | 同上 | ACE2010，Agile 加密 | 389,120 | `3e9ee219a7ca9bf7dee261f6455f298887603d41c82ea0c5bc06d8831f09637a` |
+| `upstream-jackcess-dotnet/access97-cp932.mdb` | `markmario/jackcess-dotnet` `tests/JackcessDotNet.Tests/Assets/` | Jet3，代码页 932（Jet 4.0/DAO 3.6 在 CP932 进程内创建） | 51,200 | `df2854a88a203848edefc74e4601a24ed91f7550603cb6ac525644c40b8b399f` |
+| `upstream-jackcess-dotnet/ace-large-numbers-extended-dates.accdb` | 同上 | ACE2019，BIGINT 与 EXT_DATE_TIME（DAO `CreateDatabase`，由 Access 数据库引擎生成） | 249,856 | `1c494e390aac10fb6490eca641fb507f85408f2aee5ae02e70ead8ae415e9fa5` |
 
 - `dominion525/jetdb` 为 MIT OR Apache-2.0；其 `testdata/SOURCES.md` 说明 `japaneseTestV1997.mdb` 由 DAO 3.6 以 `dbLangJapanese`（`CP=932`）独立创建，`bigIntTestV2016.accdb` 由 Access for Microsoft 365 独立创建，V2019 文件复制自 Jackcess 上游。
 - `spannm/ucanaccess` 测试库的来源与许可需按其仓库说明复核；`charsetGBK.mdb` 的期望值由 `CharsetGBKTest` 固定为 `GBK编码`。
+- `markmario/jackcess-dotnet` 仓库许可为 Apache-2.0；其 `tests/JackcessDotNet.Tests/AccessLargeNumberExtendedDateTests.cs` 与 `tools/large-number-extended-date-fixture.ps1` 记录了 V2019 样本的生成方式，`Access97ReadTests.cs` 记录了 CP932 样本由 32 位 DAO 3.6 在代码页 932 进程内创建。两者均不来自固定 Jackcess 5.2.0 基线，按独立来源登记。
 - 加密库的密码仅登记 `db2007-enc.accdb`（`Test123`）；其余两份用于验证“有 EncryptionInfo、无 codec 时明确拒绝”，不用于解密。
+- 同目录另有仅作探测、未纳入发布对照的文件（`ace-divergent-keys`、`ace-extended-date-forms`、`ace-extended-date-table-type`、`ace-second-form-foreign-key`、`ace-text-marker`、`dao-boundary-definitions`、`dao-odd-names` 及 `upstream-ucanaccess-complex/` 下的 `complex/githubIssue16/aliasNaming`）。这些文件用于检查非标记复杂外键与扩展日期第二形态；探测结果见[可读特性与已知差异](../plan/Jackcess-C++重写/16-可读特性与已知差异.md) §4。`upstream-ucanaccess-complex/` 的许可同样按其仓库说明复核。
 
-对应回归：`jet3_codepage_932`、`jet3_codepage_936`（文件存在时运行，缺失返回 77）。`japaneseTestV1997.mdb` 用 `--code-page 932` 读取 5 张表，表名/列名/索引名与三行文本及 MEMO 均与生成器说明一致，索引用 `氏名索引` 扫描得到 `Smith`、`ﾃｽﾄ`、`山田太郎`；与固定 JAR（`windows-31J`）逐表一致。`charsetGBK.mdb` 用 `--code-page 936` 读取 7 张表，`table1` 的 `GBK编码` 与固定 JAR（`GBK`）逐表一致，`PrimaryKey` 数值查找命中。两份样本对照前后哈希不变。
+对应回归：`jet3_codepage_932`、`jet3_codepage_936`（文件存在时运行，缺失返回 77）。`japaneseTestV1997.mdb` 用 `--code-page 932` 读取 5 张表，表名/列名/索引名与三行文本及 MEMO 均与生成器说明一致，索引用 `氏名索引` 扫描得到 `Smith`、`ﾃｽﾄ`、`山田太郎`；与固定 JAR（`windows-31J`）逐表一致。`access97-cp932.mdb` 用 `--code-page 932` 读取 5 张表，同样与固定 JAR（`windows-31J`）逐表一致。`charsetGBK.mdb` 用 `--code-page 936` 读取 7 张表，`table1` 的 `GBK编码` 与固定 JAR（`GBK`）逐表一致，`PrimaryKey` 数值查找命中。`ace-large-numbers-extended-dates.accdb` 的 16 张表（含 `BySql`/`ByDao` 各 12 行、BIGINT 与 EXT_DATE_TIME）与固定 JAR 逐表一致。以上样本对照前后哈希不变。
 
 ### 派生 NULL 复杂外键语料
 
