@@ -343,6 +343,25 @@ add_test(NAME code_page COMMAND rea_jackcess_code_page_tests
     "${REA_JACKCESS_JET3_DIR}/common1V1997.mdb")
 set_tests_properties(code_page PROPERTIES SKIP_RETURN_CODE 77)
 
+# Real Access 97 databases in code pages 932 and 936, downloaded from public corpora and kept out
+# of version control. The test skips when the files are absent (for example on CI).
+set(REA_JACKCESS_UPSTREAM_JETDB_DIR
+    "${PROJECT_SOURCE_DIR}/test_data_only_read/upstream-jetdb" CACHE PATH
+    "Directory holding the public jetdb V1997 Japanese sample")
+set(REA_JACKCESS_UPSTREAM_UCANACCESS_DIR
+    "${PROJECT_SOURCE_DIR}/test_data_only_read/upstream-ucanaccess-v2" CACHE PATH
+    "Directory holding the public UCanAccess GBK sample")
+add_executable(rea_jackcess_jet3_codepage_sample_tests jet3_codepage_sample_test.cpp)
+target_link_libraries(rea_jackcess_jet3_codepage_sample_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_jet3_codepage_sample_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME jet3_codepage_932
+    COMMAND rea_jackcess_jet3_codepage_sample_tests 932
+            "${REA_JACKCESS_UPSTREAM_JETDB_DIR}/japaneseTestV1997.mdb")
+add_test(NAME jet3_codepage_936
+    COMMAND rea_jackcess_jet3_codepage_sample_tests 936
+            "${REA_JACKCESS_UPSTREAM_UCANACCESS_DIR}/charsetGBK.mdb")
+set_tests_properties(jet3_codepage_932 jet3_codepage_936 PROPERTIES SKIP_RETURN_CODE 77)
+
 # A read-only handle needs a caller-supplied page codec for encoded pages; the test scrambles a
 # database it creates, so it needs no committed sample.
 add_executable(rea_jackcess_page_codec_tests page_codec_test.cpp)

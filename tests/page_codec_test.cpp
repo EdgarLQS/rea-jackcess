@@ -319,6 +319,30 @@ void test_always_encoded_container_is_rejected(const TemporaryDirectory& directo
     check(error.path() == msisam_path, "the refusal should name the container");
 }
 
+void test_ace_encryption_info_is_detected(const TemporaryDirectory& directory) {
+    // Encrypted ACE files carry an EncryptionInfo length at 0x299 even though the encoding key is
+    // zero; page zero stays readable. A bare open must still refuse the encoded pages.
+    const auto encrypted_path = directory.file("ace-encrypted.accdb");
+    std::vector<std::uint8_t> bytes(4096 * 2, 0);
+    bytes[20] = 2;  // ACE2007 engine version
+    bytes[0x299] = 1;
+    bytes[0x29a] = 0;
+    write_file(encrypted_path, bytes);
+
+    const DatabaseFile encrypted = DatabaseFile::open(encrypted_path);
+    check(encrypted.format().version == rea_jackcess::EngineVersion::ace2007,
+          "the sample should be identified as ACE2007");
+    check(encrypted.is_encoded(), "an ACE EncryptionInfo declaration should require a codec");
+
+    const auto error = expect_database_error(
+        [&] { (void)Database::open(encrypted_path); }, "an encrypted ACE file without a codec");
+    check(error.code() == DatabaseErrorCode::unsupported_operation,
+          "an encrypted ACE file without a codec should be unsupported");
+    check(std::string(error.what()).find("encoded") != std::string::npos,
+          "the refusal should say the pages are encoded");
+    check(error.path() == encrypted_path, "the refusal should name the encrypted file");
+}
+
 void test_codec_failures_propagate(const TemporaryDirectory& directory) {
     const auto scrambled_path = directory.file("scrambled.mdb");
 
@@ -359,6 +383,7 @@ int main() {
         test_missing_codec_is_rejected(directory);
         test_configured_codec_decodes(directory);
         test_always_encoded_container_is_rejected(directory);
+        test_ace_encryption_info_is_detected(directory);
         test_codec_failures_propagate(directory);
         std::cout << "page codec contract holds\n";
     } catch (const std::exception& error) {

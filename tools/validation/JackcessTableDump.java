@@ -130,11 +130,13 @@ public final class JackcessTableDump {
         }
         StringBuilder output = new StringBuilder("{\"tables\":[");
         boolean first = true;
-        try (Database db = DatabaseBuilder.open(new File(args[0]))) {
-            if (args.length == 3) {
+        try (Database db = args.length == 3
                 // Mirrors a caller overriding the Jet3 legacy-text charset on the fixed Jackcess.
-                db.setCharset(java.nio.charset.Charset.forName(args[2]));
-            }
+                // The charset is supplied before the catalog is read so that table lookups use it.
+                ? new DatabaseBuilder(new File(args[0]))
+                      .withCharset(java.nio.charset.Charset.forName(args[2]))
+                      .open()
+                : DatabaseBuilder.open(new File(args[0]))) {
             for (String name : db.getTableNames()) {
                 if (!first) {
                     output.append(',');

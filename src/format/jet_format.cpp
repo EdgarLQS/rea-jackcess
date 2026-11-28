@@ -127,5 +127,15 @@ bool root_page_declares_encoding(const std::vector<std::uint8_t>& raw_root_page)
     return key != 0;
 }
 
+bool root_page_declares_ace_encryption(const std::vector<std::uint8_t>& raw_root_page) noexcept {
+    // MS-OFFCRYPTO EncryptionInfo: u16 length at 0x299, payload at 0x29B. Both bytes lie outside
+    // the BASE_HEADER_MASK range, so they are read verbatim.
+    constexpr std::size_t length_offset = 0x299;
+    if (raw_root_page.size() < length_offset + 2) {
+        return false;
+    }
+    return raw_root_page[length_offset] != 0 || raw_root_page[length_offset + 1] != 0;
+}
+
 
 }

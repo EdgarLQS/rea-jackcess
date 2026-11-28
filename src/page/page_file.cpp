@@ -128,7 +128,13 @@ void PageFile::install_codec(PageFileOptions options) {
     code_page_override_ = options.code_page;
 
     const std::vector<std::uint8_t> root_page = read_raw_page(0);
-    encoded_ = root_page_declares_encoding(root_page) || format_.version == EngineVersion::msisam;
+    const bool ace = format_.version == EngineVersion::ace2007 ||
+                     format_.version == EngineVersion::ace2010 ||
+                     format_.version == EngineVersion::ace2016 ||
+                     format_.version == EngineVersion::ace2019;
+    encoded_ = root_page_declares_encoding(root_page) ||
+               (ace && root_page_declares_ace_encryption(root_page)) ||
+               format_.version == EngineVersion::msisam;
 
     if (options.codec) {
         const PageCodecContext context{

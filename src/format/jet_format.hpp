@@ -29,5 +29,8 @@ std::optional<std::uint16_t> decode_jet4_code_page(const std::vector<std::uint8_
 std::uint8_t header_mask_byte(std::size_t offset) noexcept;
 // True when the root page carries a non-zero encoding key, i.e. the pages need a codec.
 bool root_page_declares_encoding(const std::vector<std::uint8_t>& raw_root_page) noexcept;
+// True when an ACE root page declares EncryptionInfo (MS-OFFCRYPTO), whose length is stored at
+// absolute offset 0x299. Encrypted ACE files keep page zero readable but encode every later page.
+bool root_page_declares_ace_encryption(const std::vector<std::uint8_t>& raw_root_page) noexcept;
 
 }

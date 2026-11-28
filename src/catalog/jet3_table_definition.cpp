@@ -130,6 +130,7 @@ TableDefinition read_jet3_table_definition(const PageFile& file, std::uint64_t p
                             page_number);
     }
 
+    const std::uint16_t code_page = file.code_page_override().value_or(1252);
     DefinitionBuffer buffer(file, page_number);
     const auto header = buffer.read(0, header_size);
     const std::vector<std::uint8_t>& first_page = header;
@@ -186,7 +187,7 @@ TableDefinition read_jet3_table_definition(const PageFile& file, std::uint64_t p
         name_cursor += name_length;
 
         ColumnDefinition column;
-        column.name = decode_code_page_text(name_bytes);
+        column.name = decode_code_page_text(name_bytes, code_page);
         column.type = block[column_type_offset];
         column.column_number = u16(block, column_number_offset);
         column.variable_table_index = u16(block, column_variable_index_offset);
@@ -270,7 +271,7 @@ TableDefinition read_jet3_table_definition(const PageFile& file, std::uint64_t p
         }
         const auto name_bytes = buffer.read(index_cursor, name_length);
         index_cursor += name_length;
-        logical.name = decode_code_page_text(name_bytes);
+        logical.name = decode_code_page_text(name_bytes, code_page);
     }
 
     if (index_cursor + trailer_size > buffer.size()) {
