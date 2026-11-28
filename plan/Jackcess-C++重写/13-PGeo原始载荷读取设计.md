@@ -35,5 +35,6 @@
 - 由内存生成的 Jet4 数据库验证缺少 PGeo 目录时明确拒绝。
 - 合成 PGeo 目录验证图层关联、属性类型、OBJECTID、SRID 缺失映射，以及 NULL SHAPE 与空 SHAPE 的区别；坏目录引用须明确失败。另以合成的 GDB_FeatureClasses 布局（`GDB_FeatureClasses` + `GDB_ObjectClasses`）验证同样的图层枚举、SRS 解析与 NULL SHAPE 处理。
 - 第二份独立真实 PGeo 库 `test_mdb_2.mdb`（未入库，本地持有）：48 张表对固定 JAR 逐表一致；GDB_FeatureClasses 布局暴露 2 个图层（`报批数据_1` 16 要素、`China面地图_100_4326` 2371 要素），逐要素按 OBJECTID 与 SHAPE 字节与核心表完全一致。
+- GDAL v3.10.0 公开语料 `autotest/ogr/data/pgeo/sample.mdb`（未入库，SHA-256 `f126ec09aa8bfc305a6dd62898f359a28630883adf17673c82ef9944b6766dae`）：GDB_Items 布局，27 张表与固定 JAR 一致，3 个图层（`lines` 6、`points` 17、`polys` 10 要素）均解析出有效 SRS；逐要素属性与 SHAPE 按 OBJECTID 一致。
 - 固定样本验证适配层按 `GDB_Items` 顺序暴露完整 17 个 Feature Class，并逐层核对表名、OBJECTID/SHAPE 字段、几何属性、SRS 和完整属性列定义；逐要素检查 ID、属性与原始 SHAPE 字节。另以固定 JAR 转储按 OBJECTID 对照各层目录、属性和值及 SHAPE 长度/SHA-256。测试仅读取样本并核对源文件哈希不变。
-- 本切片不验证 Linux 双架构、独立来源 PGeo、GDAL 几何解码、SRS 语义转换或产品导入入口；这些仍按路线图的独立门槛记录。
+- 本切片不验证 Linux 双架构、GDAL 几何解码、SRS 语义转换或产品导入入口；独立来源语料已由 `test_mdb_2.mdb` 与 GDAL 样本覆盖，其余仍按路线图的独立门槛记录。
