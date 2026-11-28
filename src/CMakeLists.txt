@@ -113,12 +113,28 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${rea_jackcess_basic_weights}" "${rea_jackcess_extended_weights}"
     "${rea_jackcess_general_basic_weights}" "${rea_jackcess_general_extended_weights}"
     "${rea_jackcess_general97_basic_weights}" "${rea_jackcess_general97_extended_mappings}")
-file(SHA256 "${rea_jackcess_basic_weights}" rea_jackcess_basic_weights_sha256)
-file(SHA256 "${rea_jackcess_extended_weights}" rea_jackcess_extended_weights_sha256)
-file(SHA256 "${rea_jackcess_general_basic_weights}" rea_jackcess_general_basic_weights_sha256)
-file(SHA256 "${rea_jackcess_general_extended_weights}" rea_jackcess_general_extended_weights_sha256)
-file(SHA256 "${rea_jackcess_general97_basic_weights}" rea_jackcess_general97_basic_weights_sha256)
-file(SHA256 "${rea_jackcess_general97_extended_mappings}" rea_jackcess_general97_extended_mappings_sha256)
+# The pinned tables are hashed and embedded with LF line endings, so a work tree checked out with
+# core.autocrlf=true produces the same hashes and the same generated string literals.
+function(rea_jackcess_read_pinned_text path content_var hash_var)
+    file(READ "${path}" content)
+    string(REPLACE "\r\n" "\n" content "${content}")
+    string(SHA256 hash "${content}")
+    set(${content_var} "${content}" PARENT_SCOPE)
+    set(${hash_var} "${hash}" PARENT_SCOPE)
+endfunction()
+
+rea_jackcess_read_pinned_text("${rea_jackcess_basic_weights}"
+    rea_jackcess_basic_weight_data rea_jackcess_basic_weights_sha256)
+rea_jackcess_read_pinned_text("${rea_jackcess_extended_weights}"
+    rea_jackcess_extended_weight_data rea_jackcess_extended_weights_sha256)
+rea_jackcess_read_pinned_text("${rea_jackcess_general_basic_weights}"
+    rea_jackcess_general_basic_weight_data rea_jackcess_general_basic_weights_sha256)
+rea_jackcess_read_pinned_text("${rea_jackcess_general_extended_weights}"
+    rea_jackcess_general_extended_weight_data rea_jackcess_general_extended_weights_sha256)
+rea_jackcess_read_pinned_text("${rea_jackcess_general97_basic_weights}"
+    rea_jackcess_general97_basic_weight_data rea_jackcess_general97_basic_weights_sha256)
+rea_jackcess_read_pinned_text("${rea_jackcess_general97_extended_mappings}"
+    rea_jackcess_general97_extended_mapping_data rea_jackcess_general97_extended_mappings_sha256)
 if(NOT rea_jackcess_basic_weights_sha256 STREQUAL "acc97846553560c0b2cdde822c990cea2a2bea733ca071e850e180b9ce3cd9ee" OR
    NOT rea_jackcess_extended_weights_sha256 STREQUAL "d60378601aebc22f579b8c5dd35a4c0d3e77c371275372f25511d73fe3e92ae7" OR
    NOT rea_jackcess_general_basic_weights_sha256 STREQUAL "a0554f81d328732d3d6fcac5d44476130efeaccb96bdc1eda30590dd71ecb8b5" OR
@@ -127,12 +143,6 @@ if(NOT rea_jackcess_basic_weights_sha256 STREQUAL "acc97846553560c0b2cdde822c990
    NOT rea_jackcess_general97_extended_mappings_sha256 STREQUAL "60cb99d942c69c778bc4f2162af54168b6b3d631db502bce5d4b3a318883935c")
     message(FATAL_ERROR "A pinned Jackcess text-index weight table has an unexpected SHA-256")
 endif()
-file(READ "${rea_jackcess_basic_weights}" rea_jackcess_basic_weight_data)
-file(READ "${rea_jackcess_extended_weights}" rea_jackcess_extended_weight_data)
-file(READ "${rea_jackcess_general_basic_weights}" rea_jackcess_general_basic_weight_data)
-file(READ "${rea_jackcess_general_extended_weights}" rea_jackcess_general_extended_weight_data)
-file(READ "${rea_jackcess_general97_basic_weights}" rea_jackcess_general97_basic_weight_data)
-file(READ "${rea_jackcess_general97_extended_mappings}" rea_jackcess_general97_extended_mapping_data)
 file(WRITE "${PROJECT_BINARY_DIR}/generated/jet4_text_index_weights.inc"
     "constexpr char basic_weights[] = R\"weights(${rea_jackcess_basic_weight_data})weights\";\n"
     "constexpr char extended_weights[] = R\"weights(${rea_jackcess_extended_weight_data})weights\";\n"

@@ -2,6 +2,7 @@
 // unknown option is rejected instead of being ignored. The expected text is the fixed Jackcess
 // 5.2.0 ExportUtil output for the same table.
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -47,15 +48,42 @@ std::string read_file(const std::filesystem::path& path) {
     return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
-std::string quote(const std::filesystem::path& path) { return "'" + path.string() + "'"; }
+// The shell differs by platform: POSIX takes single quotes, while cmd.exe needs double quotes and
+// backslash separators (CreateProcess rejects a forward-slash executable path).
+std::string quote(const std::filesystem::path& path) {
+#ifdef _WIN32
+    auto text = path.string();
+    std::replace(text.begin(), text.end(), '/', '\\');
+    return "\"" + text + "\"";
+#else
+    return "'" + path.string() + "'";
+#endif
+}
 
-// std::system reports the wait status, so the exit code has to be extracted on POSIX.
+// Redirection is a shell feature the Windows command line does not share, so POSIX keeps its
+// quiet stderr while Windows lets CTest capture the usage line.
+std::string discard_stderr() {
+#ifdef _WIN32
+    return {};
+#else
+    return " 2>/dev/null";
+#endif
+}
+
+// std::system reports the wait status on POSIX but the exit code itself on Windows. The CRT passes
+// the command to `cmd /c`, which needs the whole line wrapped in an extra pair of quotes when the
+// program path is quoted.
 int run(const std::string& command) {
+#ifdef _WIN32
+    const std::string wrapped = "\"" + command + "\"";
+    return std::system(wrapped.c_str());
+#else
     const int status = std::system(command.c_str());
     if (status == -1) {
         return -1;
     }
     return (status >> 8) & 0xFF;
+#endif
 }
 
 const std::string expected_body =
@@ -88,7 +116,7 @@ void test_export(const std::filesystem::path& cli, const std::filesystem::path& 
     // An unknown option is an argument error, not a silently ignored word.
     const auto rejected_path = directory.file("rejected.csv");
     check(run(quote(cli) + " export " + quote(fixture) + " Table1 " + quote(rejected_path) +
-              " --bogus 2>/dev/null") == 2,
+              " --bogus" + discard_stderr()) == 2,
           "an unknown export option should exit with code 2");
     check(!std::filesystem::exists(rejected_path),
           "a rejected export still created the CSV file");

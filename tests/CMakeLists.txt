@@ -248,6 +248,10 @@ set_tests_properties(long_value_corrupt PROPERTIES SKIP_RETURN_CODE 77)
 # The 200k-row read is machine-local evidence; acceptance thresholds are not frozen yet.
 add_executable(rea_jackcess_perf_read_tests perf_read_test.cpp)
 target_link_libraries(rea_jackcess_perf_read_tests PRIVATE rea_jackcess::core)
+if(WIN32)
+    # Peak working set comes from GetProcessMemoryInfo.
+    target_link_libraries(rea_jackcess_perf_read_tests PRIVATE psapi)
+endif()
 target_include_directories(rea_jackcess_perf_read_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 add_test(NAME perf_read_200k COMMAND rea_jackcess_perf_read_tests 200000)
 set_tests_properties(perf_read_200k PROPERTIES TIMEOUT 900 RUN_SERIAL TRUE)

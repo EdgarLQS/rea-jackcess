@@ -9,7 +9,12 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <psapi.h>
+#else
 #include <sys/resource.h>
+#endif
 
 namespace {
 
@@ -27,6 +32,13 @@ void check(bool condition, const std::string& message) {
 }
 
 long peak_rss_kib() {
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS counters{};
+    if (::GetProcessMemoryInfo(::GetCurrentProcess(), &counters, sizeof(counters)) == 0) {
+        return -1;
+    }
+    return static_cast<long>(counters.PeakWorkingSetSize / 1024);
+#else
     rusage usage{};
     if (getrusage(RUSAGE_SELF, &usage) != 0) {
         return -1;
@@ -36,6 +48,7 @@ long peak_rss_kib() {
     return usage.ru_maxrss / 1024;
 #else
     return usage.ru_maxrss;
+#endif
 #endif
 }
 

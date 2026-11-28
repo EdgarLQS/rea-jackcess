@@ -72,6 +72,10 @@ Each generator prints the fixed-JAR reading of the file it just wrote, so the va
 compared with `rea-jackcess canonical` without a comparer. Regeneration reproduces the same values
 but not the same bytes: Jackcess stamps the object dates.
 
+On Windows the generators need JDK 17 or newer (they use `var` and `instanceof` pattern matching),
+`javac` needs `-encoding UTF-8` because the default platform code page mangles the non-ASCII and
+surrogate-pair literals, and the classpath separator is `;` instead of `:`.
+
 ### Jet4 data rows
 
 [`JackcessJet4DataFixture.java`](../../tools/validation/JackcessJet4DataFixture.java) writes

@@ -43,6 +43,16 @@ cmake --build build
 ./build/rea-jackcess --version
 ```
 
+Windows 只用于本机开发验证，不在发布平台范围内。使用 MSYS2 UCRT64 的 GCC 与 zlib，并把 `C:\msys64\ucrt64\bin` 放进 `PATH`（编译器子进程依赖其中的 DLL）：
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_MAKE_PROGRAM=C:/msys64/ucrt64/bin/ninja.exe \
+    -DCMAKE_CXX_COMPILER=C:/msys64/ucrt64/bin/g++.exe \
+    -DCMAKE_C_COMPILER=C:/msys64/ucrt64/bin/gcc.exe
+cmake --build build
+(cd build && ctest --output-on-failure)
+```
+
 `rea_jackcess::core` 是核心库的 CMake 链接目标。CLI 提供 `--help`、`--version`、`create <database-file> <v2000|v2003>`、`inspect <database-file>` 和 `canonical <database-file>`。当前 `canonical` 对 Jet4 输出已支持的 schema、`Required` 推导的列可空性、逻辑/物理索引定义和行值；CLI 尚未提供索引遍历命令。
 
 ## 包与代码分类

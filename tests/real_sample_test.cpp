@@ -229,21 +229,25 @@ int main(int argc, char** argv) {
                       "deleting from a real Access table did not lower the row count");
             }
 
-            const auto reopened = rea_jackcess::Database::open(copy);
-            for (const auto& current : reopened.tables()) {
-                if (current.name() != "GDB_SpatialRefs") {
-                    continue;
+            {
+                // Scoped so the file handle is closed before the copy is deleted; Windows refuses to
+                // remove a file that is still open.
+                const auto reopened = rea_jackcess::Database::open(copy);
+                for (const auto& current : reopened.tables()) {
+                    if (current.name() != "GDB_SpatialRefs") {
+                        continue;
+                    }
+                    check(current.row_count_header() == 3,
+                          "reopened real table copy has an unexpected row count");
+                    const auto srid = column_index(current, "SRID");
+                    std::vector<std::int32_t> keys;
+                    auto cursor = current.rows_by_index("SRID_Index");
+                    while (const auto row = cursor.next()) {
+                        keys.push_back(std::get<std::int32_t>(row->at(srid)));
+                    }
+                    check(keys == std::vector<std::int32_t>({1, 2, 3}),
+                          "the real table index did not return to its original keys");
                 }
-                check(current.row_count_header() == 3,
-                      "reopened real table copy has an unexpected row count");
-                const auto srid = column_index(current, "SRID");
-                std::vector<std::int32_t> keys;
-                auto cursor = current.rows_by_index("SRID_Index");
-                while (const auto row = cursor.next()) {
-                    keys.push_back(std::get<std::int32_t>(row->at(srid)));
-                }
-                check(keys == std::vector<std::int32_t>({1, 2, 3}),
-                      "the real table index did not return to its original keys");
             }
             std::filesystem::remove(copy);
         }
