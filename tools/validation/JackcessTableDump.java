@@ -124,13 +124,17 @@ public final class JackcessTableDump {
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length != 2) {
-            System.err.println("usage: JackcessTableDump <database> <output.json>");
+        if (args.length != 2 && args.length != 3) {
+            System.err.println("usage: JackcessTableDump <database> <output.json> [charset-name]");
             System.exit(2);
         }
         StringBuilder output = new StringBuilder("{\"tables\":[");
         boolean first = true;
         try (Database db = DatabaseBuilder.open(new File(args[0]))) {
+            if (args.length == 3) {
+                // Mirrors a caller overriding the Jet3 legacy-text charset on the fixed Jackcess.
+                db.setCharset(java.nio.charset.Charset.forName(args[2]));
+            }
             for (String name : db.getTableNames()) {
                 if (!first) {
                     output.append(',');

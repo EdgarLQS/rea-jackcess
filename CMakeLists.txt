@@ -4,6 +4,7 @@ project(rea_jackcess VERSION 0.0.0 LANGUAGES CXX)
 find_package(ZLIB REQUIRED)
 
 add_subdirectory(src)
+add_subdirectory(adapters/pgeo)
 
 add_executable(rea_jackcess_cli tools/cli/main.cpp)
 target_sources(rea_jackcess_cli PRIVATE tools/cli/canonical_json.cpp)

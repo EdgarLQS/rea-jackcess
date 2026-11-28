@@ -79,10 +79,33 @@ foreach(query_fixture v2000 v2003)
                 "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/query-${query_fixture}.mdb")
 endforeach()
 
+# The CLI export contract, including the optional --header flag after the file argument.
+add_executable(rea_jackcess_cli_csv_tests cli_csv_test.cpp)
+target_link_libraries(rea_jackcess_cli_csv_tests PRIVATE rea_jackcess::core)
+add_test(NAME cli_csv_export
+    COMMAND rea_jackcess_cli_csv_tests
+            "$<TARGET_FILE:rea_jackcess_cli>"
+            "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/complex-data-v2007.accdb")
+set_tests_properties(cli_csv_export PROPERTIES SKIP_RETURN_CODE 77)
+
+# The read-side error taxonomy and its context fields are a caller-visible contract.
+add_executable(rea_jackcess_error_context_tests error_context_test.cpp)
+target_link_libraries(rea_jackcess_error_context_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_error_context_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME error_context
+    COMMAND rea_jackcess_error_context_tests
+            "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/complex-data-v2007.accdb")
+
 add_executable(rea_jackcess_csv_tests csv_test.cpp)
 target_link_libraries(rea_jackcess_csv_tests PRIVATE rea_jackcess::core)
 target_include_directories(rea_jackcess_csv_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
 add_test(NAME csv_round_trip COMMAND rea_jackcess_csv_tests)
+add_test(NAME csv_complex_export
+    COMMAND rea_jackcess_csv_tests complex
+            "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/complex-data-v2007.accdb")
+add_test(NAME csv_unsupported_complex_export
+    COMMAND rea_jackcess_csv_tests unsupported-complex
+            "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/unsupported-fields-v2007.accdb")
 
 # SHORT_DATE_TIME is exercised on both Jet4 formats; the test builds its own databases.
 add_executable(rea_jackcess_date_time_tests date_time_test.cpp)
@@ -162,6 +185,20 @@ if(EXISTS "${REA_JACKCESS_PGEO_SAMPLE}")
     target_include_directories(rea_jackcess_real_sample_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
     add_test(NAME real_sample
         COMMAND rea_jackcess_real_sample_tests "${REA_JACKCESS_PGEO_SAMPLE}")
+endif()
+
+add_executable(rea_jackcess_pgeo_tests pgeo_layer_reader_test.cpp)
+target_link_libraries(rea_jackcess_pgeo_tests PRIVATE rea_jackcess::pgeo)
+target_include_directories(rea_jackcess_pgeo_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME pgeo_layer_reader COMMAND rea_jackcess_pgeo_tests)
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME pgeo_layer_dump_compare_unit
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tools/validation/test_compare_pgeo_layer_dump.py")
+endif()
+if(EXISTS "${REA_JACKCESS_PGEO_SAMPLE}")
+    add_test(NAME pgeo_sample_read
+        COMMAND rea_jackcess_pgeo_tests sample "${REA_JACKCESS_PGEO_SAMPLE}")
 endif()
 
 # The composite-index fixtures follow the same generated-on-demand rule.
@@ -264,6 +301,21 @@ if(EXISTS "${REA_JACKCESS_JET3_DIR}/queryV1997.mdb")
         COMMAND rea_jackcess_jet3_query_tests "${REA_JACKCESS_JET3_DIR}/queryV1997.mdb")
     set_tests_properties(jet3_query_read PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+# The Jet3 code-page tables replay Java NIO; the Jet3 sample exercises the open-path overrides.
+add_executable(rea_jackcess_code_page_tests code_page_test.cpp)
+target_link_libraries(rea_jackcess_code_page_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_code_page_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME code_page COMMAND rea_jackcess_code_page_tests
+    "${REA_JACKCESS_JET3_DIR}/common1V1997.mdb")
+set_tests_properties(code_page PROPERTIES SKIP_RETURN_CODE 77)
+
+# A read-only handle needs a caller-supplied page codec for encoded pages; the test scrambles a
+# database it creates, so it needs no committed sample.
+add_executable(rea_jackcess_page_codec_tests page_codec_test.cpp)
+target_link_libraries(rea_jackcess_page_codec_tests PRIVATE rea_jackcess::core)
+target_include_directories(rea_jackcess_page_codec_tests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+add_test(NAME page_codec COMMAND rea_jackcess_page_codec_tests)
 
 # The same bytes must behave identically when opened from a buffer instead of a file.
 add_executable(rea_jackcess_memory_open_tests memory_open_test.cpp)

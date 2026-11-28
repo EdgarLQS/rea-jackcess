@@ -31,9 +31,11 @@ struct CsvOptions {
 // Writes one record per row using the text form the fixed Jackcess 5.2.0 ExportUtil produces:
 // an empty field for NULL, true/false for BOOLEAN, four fractional digits for MONEY,
 // Java-style floating point text, braced upper-case GUIDs, and upper-case hex bytes grouped in
-// fours for BINARY and OLE. TEXT and MEMO are quoted only when they contain the delimiter, the
-// quote character, CR or LF, and embedded quotes are doubled.
-// DATE, complex and other unsupported column types raise DatabaseErrorCode::unsupported_operation.
+// fours for BINARY and OLE. Complex columns export the decimal ComplexValueForeignKey reference
+// for multi-value, attachment, version-history and unsupported complex types; their flat-table
+// values are not expanded. TEXT and MEMO are quoted only when they contain the delimiter, the
+// quote character, CR or LF, and embedded quotes are doubled. Complex columns can be exported but
+// not imported; other unsupported column types raise DatabaseErrorCode::unsupported_operation.
 void export_table_csv(const Table& table, std::ostream& output, const CsvOptions& options = {});
 void export_table_csv(const Table& table,
                       const std::filesystem::path& path,

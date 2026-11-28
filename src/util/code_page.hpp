@@ -6,11 +6,11 @@
 
 namespace rea_jackcess::detail {
 
-// Decodes single-byte code-page text. Windows-1252 matches the Jet3 samples; the five undefined
-// byte values fall back to Latin-1 like most Access files. Other code pages need a real mapping
-// table and are tracked in plan/Jackcess-C++重写/12-Jet3只读实施计划.md.
-// `code_page` is 1252 (default), or 819/28591 for Latin-1. Other values throw
-// std::invalid_argument; callers validate the option before opening.
+// Decodes legacy code-page text. 1252 matches the Jet3 samples; 819/28591 are Latin-1; 1251,
+// 936 (GBK) and 932 (Shift-JIS) replay the Java NIO decode results recorded in
+// src/util/code_page_*.inc, so malformed sequences behave exactly like the fixed Jackcess running
+// on that charset (one U+FFFD per malformed run). `code_page` defaults to 1252; other values
+// throw std::invalid_argument, and callers validate the option before opening.
 std::string decode_code_page_text(const std::vector<std::uint8_t>& bytes,
                                   std::uint16_t code_page = 1252);
 

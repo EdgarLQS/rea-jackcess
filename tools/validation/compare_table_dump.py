@@ -10,20 +10,27 @@ as row multisets after normalising formatting-only differences:
 * floats compare with a small relative tolerance, NaN equals NaN,
 * BOOLEAN compares as a boolean even when one side prints 0/1.
 
+Calculated columns are compared by the ResultType the C++ dump reports as `effectiveType`, because
+Jackcess exposes the calculated type rather than the stored one. ACE flat tables (`f_` prefix) are
+listed by the C++ dump but deliberately skipped by the Jackcess dump, so they are not a difference.
+Complex columns hold a foreign key that Jackcess prints as text and the C++ dump as a number.
+
 Usage: compare_table_dump.py <cpp-canonical.json> <jackcess-dump.json>
 Exit code 0 means every table, column, and value matched; 1 lists the differences.
 """
 
+import hashlib
 import json
 import math
 import re
 import sys
 from collections import Counter
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 # C++ canonical type names that differ from the Jackcess DataType names.
 TYPE_ALIASES = {"SHORT": "INT"}
 
+RAW_DATA_RE = re.compile(r"^RawData\[\((\d+)\)([0-9a-fA-F ]*)\]$")
 GUID_RE = re.compile(r"^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                      r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$")
 
@@ -37,6 +44,36 @@ def normalise_date(text):
             int(second or 0), (fraction or "").rstrip("0"))
 
 
+def complex_equal(cpp_value, java_value):
+    """A complex-value foreign key is a number; Jackcess prints its toString()."""
+    if cpp_value is None or java_value is None:
+        return cpp_value is None and java_value is None
+    try:
+        return Decimal(str(cpp_value)) == Decimal(str(java_value))
+    except InvalidOperation:
+        return str(cpp_value) == str(java_value)
+
+
+def float32_value(value):
+    """Read a dumped number that came from a 4-byte float column."""
+    if isinstance(value, dict) and "$float" in value:
+        return float(value["$float"])
+    return float(value)
+
+
+def float32_equal(cpp_value, java_value):
+    """float32 columns print with different precision on each side; compare at float32 accuracy."""
+    if cpp_value is None or java_value is None:
+        return cpp_value is None and java_value is None
+    try:
+        left, right = float32_value(cpp_value), float32_value(java_value)
+    except (TypeError, ValueError):
+        return cell_equal(cpp_value, java_value)
+    if math.isnan(left) or math.isnan(right):
+        return math.isnan(left) and math.isnan(right)
+    return math.isclose(left, right, rel_tol=1e-6, abs_tol=0.0)
+
+
 def normalise(value):
     if value is None:
         return ("null",)
@@ -47,6 +84,10 @@ def normalise(value):
     if isinstance(value, float):
         return ("nan",) if math.isnan(value) else ("float", value)
     if isinstance(value, str):
+        raw = RAW_DATA_RE.match(value)
+        if raw:
+            payload = bytes.fromhex("".join(raw.group(2).split()))
+            return ("blob", int(raw.group(1)), hashlib.sha256(payload).hexdigest())
         if GUID_RE.match(value):
             return ("guid", value.strip("{}").lower())
         return ("text", value)
@@ -65,7 +106,10 @@ def normalise(value):
         if "$dateOutOfRange" in value:
             return ("date-out-of-range", round(float(value["$dateOutOfRange"]), 6))
         if "$unsupported" in value:
-            return ("unsupported", value["$unsupported"])
+            payload = value["$unsupported"]
+            if isinstance(payload, dict):
+                return ("blob", payload["size"], payload["sha256"])
+            return ("unsupported", payload)
     return ("other", repr(value))
 
 
@@ -79,8 +123,21 @@ def cell_equal(left, right):
     return False
 
 
-def row_key(row):
-    return tuple(repr(normalise(cell)) for cell in row)
+def row_key(row, kinds=()):
+    def key(index, cell):
+        kind = kinds[index] if index < len(kinds) else "default"
+        if kind == "complex":
+            if cell is None:
+                return ("null",)
+            try:
+                return ("complex", Decimal(str(cell)))
+            except InvalidOperation:
+                return ("complex-text", str(cell))
+        if kind == "float32":
+            return ("float32", round(float32_value(cell), 6))
+        return repr(normalise(cell))
+
+    return tuple(key(index, cell) for index, cell in enumerate(row))
 
 
 def compare(cpp_path, java_path):
@@ -89,10 +146,16 @@ def compare(cpp_path, java_path):
     with open(java_path, encoding="utf-8") as handle:
         java = json.load(handle)
 
-    if cpp.get("errors"):
+    notes = []
+    for error in cpp.get("errors") or []:
+        # A column whose MDB type has no canonical mapping is reported by the dump and is a known
+        # limitation of the diagnostic, not a mismatch with Jackcess.
+        if error.get("stage") == "column-schema" and "Canonical type mapping" in error.get("message", ""):
+            notes.append(error)
+            continue
         print("C++ canonical reported errors:")
-        for error in cpp["errors"]:
-            print("  ", error)
+        for problem in cpp["errors"]:
+            print("  ", problem)
         return 1
 
     cpp_tables = {table["name"]: table for table in cpp["tables"]}
@@ -100,6 +163,10 @@ def compare(cpp_path, java_path):
     problems = []
 
     for name in sorted(set(cpp_tables) - set(java_tables)):
+        # ACE stores complex values in f_<guid>_<column> flat tables. The C++ dump lists them; the
+        # Jackcess dump skips system tables with that prefix on purpose.
+        if name.startswith("f_"):
+            continue
         problems.append(f"{name}: only in the C++ dump")
     for name in sorted(set(java_tables) - set(cpp_tables)):
         problems.append(f"{name}: only in the Jackcess dump")
@@ -112,7 +179,8 @@ def compare(cpp_path, java_path):
             problems.append(f"{name}: column names differ")
             continue
         for cpp_column, java_column in zip(cpp_columns, java_columns):
-            cpp_type = TYPE_ALIASES.get(cpp_column["mdbType"], cpp_column["mdbType"])
+            declared_type = cpp_column.get("effectiveType", cpp_column["mdbType"])
+            cpp_type = TYPE_ALIASES.get(declared_type, declared_type)
             if cpp_type != java_column["type"]:
                 problems.append(f"{name}.{cpp_column['name']}: type {cpp_type} != {java_column['type']}")
             if cpp_column["size"] != java_column["length"]:
@@ -123,10 +191,33 @@ def compare(cpp_path, java_path):
         if len(cpp_rows) != len(java_rows):
             problems.append(f"{name}: row count {len(cpp_rows)} != {len(java_rows)}")
             continue
-        if not all(cell_equal(a, b) for row in zip(cpp_rows, java_rows) for a, b in zip(*row)):
+        kinds = []
+        for index, column in enumerate(java_columns):
+            if column["type"] == "COMPLEX_TYPE":
+                kinds.append("complex")
+            elif column["type"] == "FLOAT":
+                # float32 text forms differ in the last digits; compare the stored value.
+                kinds.append("float32")
+            else:
+                kinds.append("default")
+        complex_columns = [index for index, kind in enumerate(kinds) if kind == "complex"]
+
+        def rows_equal(left, right):
+            for a_row, b_row in zip(left, right):
+                for index, (a, b) in enumerate(zip(a_row, b_row)):
+                    kind = kinds[index]
+                    if kind == "complex" and not complex_equal(a, b):
+                        return False
+                    if kind == "float32" and not float32_equal(a, b):
+                        return False
+                    if kind == "default" and not cell_equal(a, b):
+                        return False
+            return True
+
+        if not rows_equal(cpp_rows, java_rows):
             # Fall back to a multiset comparison so row order does not matter.
-            cpp_counter = Counter(row_key(row) for row in cpp_rows)
-            java_counter = Counter(row_key(row) for row in java_rows)
+            cpp_counter = Counter(row_key(row, kinds) for row in cpp_rows)
+            java_counter = Counter(row_key(row, kinds) for row in java_rows)
             if cpp_counter != java_counter:
                 missing = sum((cpp_counter - java_counter).values())
                 extra = sum((java_counter - cpp_counter).values())
@@ -141,6 +232,8 @@ def compare(cpp_path, java_path):
         for problem in problems:
             print("  ", problem)
         return 1
+    for note in notes:
+        print(f"note: {note['table']}.{note['column']}: {note['message']}")
     print(f"Compared {len(cpp_tables)} tables: schema and rows match.")
     return 0
 

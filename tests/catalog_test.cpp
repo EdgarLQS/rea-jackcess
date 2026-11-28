@@ -171,6 +171,11 @@ std::filesystem::path make_database_fixture() {
     const std::string engine_name = "Standard Jet DB";
     std::copy(engine_name.begin(), engine_name.end(), file_bytes.begin() + 4);
     file_bytes[20] = 1;
+    // Real Jet4 files store the header from offset 24 masked, so a zero field is written as the
+    // mask byte itself. Leaving this region unmasked would fake a non-zero encoding key.
+    for (std::size_t offset = rea_jackcess::detail::header_mask_offset; offset < 66; ++offset) {
+        file_bytes[offset] = rea_jackcess::detail::header_mask_byte(offset);
+    }
 
     const std::array<TestColumn, 5> columns{{
         {u"Id", 0x04, 0x01, 0, 0, 4},

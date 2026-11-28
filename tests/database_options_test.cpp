@@ -48,7 +48,7 @@ int main(int argc, char** argv) {
         check(rea_jackcess::detail::decode_code_page_text({0x80}, 819) == "\xc2\x80",
               "819 decoding of 0x80 changed");
         try {
-            (void)rea_jackcess::detail::decode_code_page_text({0x80}, 936);
+            (void)rea_jackcess::detail::decode_code_page_text({0x81, 0x20}, 1254);
         } catch (const std::invalid_argument&) {
             // expected
         }
@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
 
         // Anything outside the supported set is rejected when opening.
         DatabaseOptions unsupported;
-        unsupported.code_page = 936;
+        unsupported.code_page = 1254;
         try {
             (void)Database::open(path, unsupported);
         } catch (const DatabaseError& error) {

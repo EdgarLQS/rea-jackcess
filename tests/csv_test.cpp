@@ -16,8 +16,12 @@ namespace {
 
 using rea_jackcess::CsvOptions;
 using rea_jackcess::Database;
+using rea_jackcess::DatabaseError;
+using rea_jackcess::DatabaseErrorCode;
 using rea_jackcess::DatabaseFormat;
 using rea_jackcess::DatabaseOpenMode;
+using rea_jackcess::DataType;
+using rea_jackcess::Row;
 using rea_jackcess::Table;
 using rea_jackcess::TableBuilder;
 using rea_jackcess::Value;
@@ -72,6 +76,17 @@ Table types_table(const Database& database) {
         }
     }
     throw std::runtime_error("the Types table is missing");
+}
+
+Table named_table(const Database& database, const std::string& name) {
+    const auto tables = database.tables();
+    const auto table = std::find_if(tables.begin(), tables.end(), [&](const auto& candidate) {
+        return candidate.name() == name;
+    });
+    if (table == tables.end()) {
+        throw std::runtime_error("the " + name + " table is missing");
+    }
+    return *table;
 }
 
 void write_rows(Table& table) {
@@ -157,6 +172,85 @@ void test_export_columns_and_row_filter(const std::filesystem::path& directory) 
         rea_jackcess::export_table_csv(table, rejected_output, options);
     });
     check(rejected_output.str().empty(), "an invalid export column wrote partial CSV output");
+}
+
+void test_complex_reference_export(const std::filesystem::path& fixture) {
+    auto database = Database::open(fixture);
+    auto table = named_table(database, "Table1");
+    const auto& columns = table.columns();
+    check(columns.size() == 6 && columns[1].type == DataType::complex &&
+              columns[4].type == DataType::complex && columns[5].type == DataType::complex,
+          "the fixed ACE sample has an unexpected complex-column schema");
+
+    CsvOptions options;
+    options.header = true;
+    options.columns = {"id", columns[1].name, columns[4].name, columns[5].name};
+    std::ostringstream all_rows;
+    rea_jackcess::export_table_csv(table, all_rows, options);
+    check(all_rows.str() ==
+              "id,VersionHistory_F5F8918F-0A3F-4DA9-AE71-184EE5012880,multi-value-data,attach-data\n"
+              "row1,1,1,1\nrow2,2,2,2\nrow3,3,3,3\nrow4,4,4,4\n",
+          "complex CSV output did not match Jackcess foreign-key text:\n" + all_rows.str());
+
+    options.row_filter = [](const Row& row) {
+        check(row.size() == 4, "the complex CSV filter did not receive projected values");
+        const auto* foreign_key = std::get_if<std::int32_t>(&row.at(1));
+        return foreign_key != nullptr && *foreign_key >= 3;
+    };
+    std::ostringstream filtered_rows;
+    rea_jackcess::export_table_csv(table, filtered_rows, options);
+    check(filtered_rows.str() ==
+              "id,VersionHistory_F5F8918F-0A3F-4DA9-AE71-184EE5012880,multi-value-data,attach-data\n"
+              "row3,3,3,3\nrow4,4,4,4\n",
+          "complex CSV filtering changed the selected rows:\n" + filtered_rows.str());
+
+    std::istringstream import_input;
+    bool complex_import_rejected = false;
+    try {
+        (void)rea_jackcess::import_table_csv(table, import_input);
+    } catch (const DatabaseError& error) {
+        complex_import_rejected = error.code() == DatabaseErrorCode::unsupported_operation &&
+                                  error.context().table_name == "Table1" &&
+                                  error.context().column_name == columns[1].name;
+    }
+    check(complex_import_rejected,
+          "CSV import did not reject complex columns with table/column context");
+}
+
+void test_unsupported_complex_reference_export(const std::filesystem::path& fixture) {
+    auto database = Database::open(fixture);
+    const auto table = named_table(database, "Test");
+    const auto unknown_complex = std::find_if(table.columns().begin(), table.columns().end(),
+                                              [](const auto& column) {
+        return column.name == "UnknownComplex";
+    });
+    check(unknown_complex != table.columns().end() &&
+              unknown_complex->type == DataType::complex &&
+              unknown_complex->complex_column_reference &&
+              unknown_complex->complex_column_reference->type ==
+                  rea_jackcess::ComplexColumnType::unsupported,
+          "the fixed sample did not expose its unsupported complex field");
+
+    CsvOptions options;
+    options.header = true;
+    options.columns = {"ID", "UnknownComplex"};
+    std::ostringstream exported;
+    rea_jackcess::export_table_csv(table, exported, options);
+    check(exported.str() == "ID,UnknownComplex\n1,1\n2,2\n3,3\n",
+          "an unsupported complex type did not export its raw foreign-key reference");
+
+    options.columns = {"ID", "UnknownVar"};
+    std::ostringstream rejected;
+    bool unsupported_rejected = false;
+    try {
+        rea_jackcess::export_table_csv(table, rejected, options);
+    } catch (const DatabaseError& error) {
+        unsupported_rejected = error.code() == DatabaseErrorCode::unsupported_operation &&
+                               error.context().table_name == "Test" &&
+                               error.context().column_name == "UnknownVar";
+    }
+    check(unsupported_rejected && rejected.str().empty(),
+          "an unsupported scalar value was not rejected before CSV output");
 }
 
 void test_import_round_trip(const std::filesystem::path& directory) {
@@ -288,8 +382,23 @@ void test_errors(const std::filesystem::path& directory) {
 
 }
 
-int main() {
+int main(int argc, char** argv) {
     try {
+        if (argc == 3) {
+            const std::string mode = argv[1];
+            if (mode == "complex") {
+                test_complex_reference_export(argv[2]);
+            } else if (mode == "unsupported-complex") {
+                test_unsupported_complex_reference_export(argv[2]);
+            } else {
+                throw std::invalid_argument("unknown CSV test mode: " + mode);
+            }
+            std::cout << "CSV complex export tests passed\n";
+            return 0;
+        }
+        if (argc != 1) {
+            throw std::invalid_argument("usage: rea_jackcess_csv_tests [complex|unsupported-complex fixture]");
+        }
         TemporaryDirectory directory;
         test_export_matches_baseline(directory.path());
         test_export_columns_and_row_filter(directory.path());

@@ -24,12 +24,14 @@ namespace {
 
 constexpr std::size_t import_chunk_rows = 500;
 
-[[noreturn]] void unsupported_column(const Table& table, const ColumnInfo& column) {
+[[noreturn]] void unsupported_column(const Table& table,
+                                    const ColumnInfo& column,
+                                    std::string_view operation) {
     DatabaseErrorContext context;
     context.table_name = table.name();
     context.column_name = column.name;
     throw DatabaseError(DatabaseErrorCode::unsupported_operation,
-                        "CSV import and export do not support this column type yet",
+                        "CSV " + std::string(operation) + " does not support this column type",
                         {},
                         std::nullopt,
                         std::move(context));
@@ -238,6 +240,13 @@ std::string column_text(const Table& table, const ColumnInfo& column, const Valu
                 return guid_text(guid->text);
             }
             break;
+        case DataType::complex:
+            // Jackcess ExportUtil writes ComplexValueForeignKey.toString(), which is its
+            // decimal foreign-key number; it does not expand multi-value or attachment rows.
+            if (const auto* foreign_key = std::get_if<std::int32_t>(&value)) {
+                return std::to_string(*foreign_key);
+            }
+            break;
         case DataType::short_date_time:
             // ExportUtil writes the value's toString(), i.e. the ISO_LOCAL_DATE_TIME text.
             if (const auto* date = std::get_if<DateTimeValue>(&value)) {
@@ -269,7 +278,7 @@ std::string column_text(const Table& table, const ColumnInfo& column, const Valu
     if (std::holds_alternative<std::monostate>(value)) {
         return {};
     }
-    unsupported_column(table, column);
+    unsupported_column(table, column, "export");
 }
 
 bool is_supported_type(DataType type) {
@@ -292,6 +301,10 @@ bool is_supported_type(DataType type) {
         default:
             return false;
     }
+}
+
+bool is_export_supported_type(DataType type) {
+    return type == DataType::complex || is_supported_type(type);
 }
 
 std::string lower_ascii(std::string text) {
@@ -438,7 +451,7 @@ Value field_value(const Table& table, const ColumnInfo& column, const std::strin
         case DataType::ole:
             return Value{BlobValue{parse_hex_bytes(table, column, field)}};
         default:
-            unsupported_column(table, column);
+            unsupported_column(table, column, "import");
     }
 }
 
@@ -537,8 +550,8 @@ void export_table_csv(const Table& table, std::ostream& output, const CsvOptions
         }
     }
     for (const auto* column : columns) {
-        if (!is_supported_type(column->type)) {
-            unsupported_column(table, *column);
+        if (!is_export_supported_type(column->type)) {
+            unsupported_column(table, *column, "export");
         }
     }
     if (options.header) {
@@ -578,7 +591,7 @@ std::size_t import_table_csv(Table& table, std::istream& input, const CsvOptions
     const auto& columns = table.columns();
     for (const auto& column : columns) {
         if (!is_supported_type(column.type)) {
-            unsupported_column(table, column);
+            unsupported_column(table, column, "import");
         }
     }
     std::vector<ColumnMapping> mapping;

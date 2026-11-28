@@ -23,8 +23,8 @@
 | 包 | 源码位置 | 边界与状态 |
 |---|---|---|
 | API 门面 | `src/api/` | 组合内部实现并提供公开类方法；当前支持读写打开、空库创建、带表 schema 的 Jet4 V2000/V2003 创建、受限行追加、等长原位更新、增长行 overflow 更新、缩短行压实和行删除，并对单列升序/降序（含唯一）索引维护条目；行写入根据 `MSysDb.AccessVersion` 接受 V2000 `08.50` 与 V2003 `09.50`，文件缺该属性时按 Jet4 版式处理；写入上下文通过轻量结构传给 `write`，不形成包循环 |
-| 格式 | `src/format/` | Jet/ACE 版本识别、格式布局和格式特有编码规则；当前实现版本头识别 |
-| 页 | `src/page/` | 有界页 I/O、页结构、缓存和分配；当前提供只读页访问、Jet4 数据页行目录、Jet4 原始页覆盖/追加/刷新、跨句柄 advisory 写锁，以及改页前记录原始镜像的写盘日志（`WriteJournal`，批次刷新后删除，下次读写打开时回放） |
+| 格式 | `src/format/` | Jet/ACE 版本识别、格式布局和格式特有编码规则；当前实现版本头识别、头部掩码解码与编码键判定 |
+| 页 | `src/page/` | 有界页 I/O、页结构、缓存和分配；当前提供只读页访问（可选调用方 `PageCodec` 逐页解码，页 0 原样）、Jet4 数据页行目录、Jet4 原始页覆盖/追加/刷新、跨句柄 advisory 写锁，以及改页前记录原始镜像的写盘日志（`WriteJournal`，批次刷新后删除，下次读写打开时回放） |
 | 目录 | `src/catalog/` | 系统目录、表定义、schema、Usage Map、行发现/读取及其物理元数据解析；当前支持 Jet4 读取 |
 | 值 | `src/value/` | 类型映射、标量/长值解码与编码；当前实现 Jet4 基础值读取、日期序列转换和 ACE 附件 OLE wrapper 解码；deflate 解码依赖 zlib，不承担表/页布局解释 |
 | 元数据 | `src/metadata/`（规划） | Jet4 关系目录读取在 `src/api/relationships.cpp`，属性块与索引定义解析在目录层。关系创建在 `write/jet4_relationship_creator.cpp`：向两端表的定义追加逻辑索引描述（定义跨页时按续页链重组）并写入 `MSysRelationships` 目录行，要求父表参照列已有唯一索引，子表外键索引可复用或自动构建；已有本地外键索引的写入前校验和级联执行同在 `write` 包，覆盖复合键与 TEXT/BINARY/GUID 键 |
@@ -51,7 +51,7 @@ value ──> page, format, util
 page ──> format
 ```
 
-依赖只从上层指向下层，不以回调或头文件引用形成包循环。PGeo 适配器通过公开 API 使用核心库，并单独依赖 GDAL；核心库不依赖 GDAL、JVM 或 libmdb。`tools/cli/` 和 `tests/` 是独立消费者；canonical 诊断工具目前可直接读取内部目录结构，以保留解析阶段和字段级诊断。
+依赖只从上层指向下层，不以回调或头文件引用形成包循环。`adapters/pgeo/` 构建为独立目标 `rea_jackcess::pgeo`，当前只通过公开 API 使用核心库，负责图层目录映射和原始 SHAPE 读取；目标产品的几何解码可另行依赖 GDAL。核心库不依赖 GDAL、JVM 或 libmdb。`tools/cli/` 和 `tests/` 是独立消费者；canonical 诊断工具目前可直接读取内部目录结构，以保留解析阶段和字段级诊断。
 
 ## 构建与实现约定
 

@@ -29,7 +29,7 @@ PageFile::PageFile(std::filesystem::path path,
       file_size_(bytes.size()),
       memory_(std::make_shared<const std::vector<std::uint8_t>>(std::move(bytes))) {}
 
-PageFile PageFile::open(const std::filesystem::path& path, std::optional<std::uint16_t> code_page) {
+PageFile PageFile::open(const std::filesystem::path& path, PageFileOptions options) {
     std::error_code filesystem_error;
     const std::uint64_t file_size = std::filesystem::file_size(path, filesystem_error);
     if (filesystem_error) {
@@ -58,13 +58,13 @@ PageFile PageFile::open(const std::filesystem::path& path, std::optional<std::ui
     }
 
     PageFile result(path, std::move(stream), format, file_size);
-    result.code_page_override_ = code_page;
+    result.install_codec(std::move(options));
     return result;
 }
 
 PageFile PageFile::open(std::vector<std::uint8_t> bytes,
                         std::string memory_name,
-                        std::optional<std::uint16_t> code_page) {
+                        PageFileOptions options) {
     const std::filesystem::path name(std::move(memory_name));
     if (bytes.size() < header_size) {
         throw DatabaseError(DatabaseErrorCode::truncated_file,
@@ -81,7 +81,7 @@ PageFile PageFile::open(std::vector<std::uint8_t> bytes,
                             name);
     }
     PageFile result(name, std::move(bytes), format);
-    result.code_page_override_ = code_page;
+    result.install_codec(std::move(options));
     return result;
 }
 
@@ -90,8 +90,10 @@ PageFile::PageFile(PageFile&& other)
       stream_(std::move(other.stream_)),
       format_(other.format_),
       file_size_(other.file_size_),
-      memory_(std::move(other.memory_)),
-      code_page_override_(other.code_page_override_) {}
+      code_page_override_(other.code_page_override_),
+      encoded_(other.encoded_),
+      codec_(std::move(other.codec_)),
+      memory_(std::move(other.memory_)) {}
 
 PageFile& PageFile::operator=(PageFile&& other) {
     if (this == &other) {
@@ -103,8 +105,10 @@ PageFile& PageFile::operator=(PageFile&& other) {
     stream_ = std::move(other.stream_);
     format_ = other.format_;
     file_size_ = other.file_size_;
-    memory_ = std::move(other.memory_);
     code_page_override_ = other.code_page_override_;
+    encoded_ = other.encoded_;
+    codec_ = std::move(other.codec_);
+    memory_ = std::move(other.memory_);
     return *this;
 }
 
@@ -120,7 +124,61 @@ std::uint64_t PageFile::page_count() const noexcept {
     return file_size_ / format_.page_size;
 }
 
+void PageFile::install_codec(PageFileOptions options) {
+    code_page_override_ = options.code_page;
+
+    const std::vector<std::uint8_t> root_page = read_raw_page(0);
+    encoded_ = root_page_declares_encoding(root_page) || format_.version == EngineVersion::msisam;
+
+    if (options.codec) {
+        const PageCodecContext context{
+            format_,
+            path_,
+            [this](std::uint64_t page_number) { return read_raw_page(page_number); },
+            encoded_};
+        codec_ = options.codec(context);
+    }
+    codec_declined_ = static_cast<bool>(options.codec) && !codec_;
+}
+
+void PageFile::require_decodable() const {
+    if (!encoded_ || codec_) {
+        return;
+    }
+    throw DatabaseError(DatabaseErrorCode::unsupported_operation,
+                        codec_declined_
+                            ? "The page codec factory returned no codec for an encoded database"
+                            : "Database pages are encoded; open it with a page codec",
+                        path_);
+}
+
 std::vector<std::uint8_t> PageFile::read_page(std::uint64_t page_number) const {
+    std::vector<std::uint8_t> page = read_raw_page(page_number);
+    if (page_number == 0 || !codec_) {
+        // Page zero carries the header and is never encoded, so callers can always read it.
+        return page;
+    }
+
+    try {
+        codec_->decode_page(page.data(), page.size(), page_number);
+    } catch (const DatabaseError& error) {
+        if (error.page_number()) {
+            throw;
+        }
+        throw DatabaseError(error.code(),
+                            error.what(),
+                            error.path().empty() ? path_ : error.path(),
+                            page_number);
+    } catch (const std::exception& error) {
+        throw DatabaseError(DatabaseErrorCode::corrupted_file,
+                            std::string("Page codec failed to decode the page: ") + error.what(),
+                            path_,
+                            page_number);
+    }
+    return page;
+}
+
+std::vector<std::uint8_t> PageFile::read_raw_page(std::uint64_t page_number) const {
     if (page_number >= page_count()) {
         throw DatabaseError(DatabaseErrorCode::page_out_of_range,
                             "Database page number is out of range", path_, page_number);

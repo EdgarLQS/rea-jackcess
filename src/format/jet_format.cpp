@@ -35,8 +35,14 @@ namespace {
 constexpr std::size_t engine_name_offset = 4;
 constexpr std::uint64_t version_offset = 20;
 constexpr std::size_t code_page_offset = 60;
-constexpr std::uint8_t code_page_mask_low = 0x7b;
-constexpr std::uint8_t code_page_mask_high = 0x42;
+constexpr std::size_t encoding_key_size = 4;
+
+// Jackcess BASE_HEADER_MASK, truncated at the last byte the read-only path needs (the encoding
+// key ends at offset 65). Masks are indexed from header_mask_offset.
+constexpr std::array<std::uint8_t, 42> header_mask{
+    0xB5, 0x6F, 0x03, 0x62, 0x61, 0x08, 0xC2, 0x55, 0xEB, 0xA9, 0x67, 0x72, 0x43, 0x3F,
+    0x00, 0x9C, 0x7A, 0x9F, 0x90, 0xFF, 0x80, 0x9A, 0x31, 0xC5, 0x79, 0xBA, 0xED, 0x30,
+    0xBC, 0xDF, 0xCC, 0x9D, 0x63, 0xD9, 0xE4, 0xC3, 0x7B, 0x42, 0xFB, 0x8A, 0xBC, 0x4E};
 constexpr std::array<char, 15> msisam_engine_name{
     'M', 'S', 'I', 'S', 'A', 'M', ' ', 'D', 'a', 't', 'a', 'b', 'a', 's', 'e'};
 
@@ -49,6 +55,14 @@ bool is_msisam(const std::array<std::uint8_t, database_header_size>& header) {
     return true;
 }
 
+}
+
+std::uint8_t header_mask_byte(std::size_t offset) noexcept {
+    if (offset < header_mask_offset) {
+        return 0;
+    }
+    const std::size_t index = offset - header_mask_offset;
+    return index < header_mask.size() ? header_mask[index] : 0;
 }
 
 bool has_jet4_page_layout(EngineVersion version) noexcept {
@@ -93,9 +107,25 @@ std::optional<std::uint16_t> decode_jet4_code_page(const std::vector<std::uint8_
         return std::nullopt;
     }
     // These are BASE_HEADER_MASK bytes 36-37 at root-page offset 24, per Jackcess 5.2.0.
-    const std::uint8_t low = raw_root_page[code_page_offset] ^ code_page_mask_low;
-    const std::uint8_t high = raw_root_page[code_page_offset + 1] ^ code_page_mask_high;
+    const std::uint8_t low = raw_root_page[code_page_offset] ^ header_mask_byte(code_page_offset);
+    const std::uint8_t high = raw_root_page[code_page_offset + 1] ^ header_mask_byte(code_page_offset + 1);
     return static_cast<std::uint16_t>(low) | static_cast<std::uint16_t>(static_cast<std::uint16_t>(high) << 8);
 }
+
+bool root_page_declares_encoding(const std::vector<std::uint8_t>& raw_root_page) noexcept {
+    if (raw_root_page.size() < encoding_key_offset + encoding_key_size) {
+        return false;
+    }
+    // DefaultCodecProvider reads the key as a 4-byte little-endian int; any non-zero value means
+    // the pages are encoded.
+    std::uint32_t key = 0;
+    for (std::size_t index = 0; index < encoding_key_size; ++index) {
+        const std::size_t offset = encoding_key_offset + index;
+        const std::uint8_t value = raw_root_page[offset] ^ header_mask_byte(offset);
+        key |= static_cast<std::uint32_t>(value) << (8 * index);
+    }
+    return key != 0;
+}
+
 
 }

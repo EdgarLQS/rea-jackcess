@@ -8,6 +8,7 @@
 #include "canonical_json.hpp"
 
 #include <iostream>
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -76,6 +77,7 @@ int main(int argc, char* argv[]) {
     if (argc == 1 || option == "--help") {
         std::cout << "Usage: rea-jackcess [--help | --version | create <database-file> <v2000|v2003> | "
                      "inspect <database-file> | canonical <database-file> | "
+                     "canonical <database-file> [--code-page <n>] | "
                      "export <database-file> <table> <csv-file> [--header] | "
                      "import <database-file> <table> <csv-file> [--header]\n";
         return 0;
@@ -112,9 +114,22 @@ int main(int argc, char* argv[]) {
             return 1;
         }
     }
-    if (argc == 3 && option == "canonical") {
+    if ((argc == 3 || argc == 5) && option == "canonical") {
+        std::optional<std::uint16_t> code_page;
+        if (argc == 5) {
+            if (std::string_view(argv[3]) != "--code-page") {
+                std::cerr << "Unknown canonical option: " << argv[3] << '\n';
+                return 2;
+            }
+            const long parsed = std::strtol(argv[4], nullptr, 10);
+            if (parsed <= 0 || parsed > 65535) {
+                std::cerr << "Invalid code page: " << argv[4] << '\n';
+                return 2;
+            }
+            code_page = static_cast<std::uint16_t>(parsed);
+        }
         try {
-            const auto database = rea_jackcess::detail::PageFile::open(argv[2]);
+            const auto database = rea_jackcess::detail::PageFile::open(argv[2], {code_page, {}});
             rea_jackcess::detail::write_canonical_json(std::cout, database, database.path());
             return 0;
         } catch (const rea_jackcess::DatabaseError& error) {
@@ -205,11 +220,11 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    if ((argc == 6 || argc == 7) && (option == "export" || option == "import")) {
+    if ((argc == 5 || argc == 6) && (option == "export" || option == "import")) {
         rea_jackcess::CsvOptions options;
-        if (argc == 7) {
-            if (std::string_view(argv[6]) != "--header") {
-                std::cerr << "Unknown export/import option: " << argv[6] << '\n';
+        if (argc == 6) {
+            if (std::string_view(argv[5]) != "--header") {
+                std::cerr << "Unknown export/import option: " << argv[5] << '\n';
                 return 2;
             }
             options.header = true;

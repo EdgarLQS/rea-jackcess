@@ -253,3 +253,31 @@ not carry one. The writer accepts a descending key on the child index, which was
 a copy whose ascending flag was cleared by hand and reopened with the fixed Jackcess 5.2.0; see
 [the baseline record](../../plan/Jackcess-C++重写/04-P0基线核验记录.md). Keep that in mind before
 relying on such files: only hand-edited databases are known to contain them.
+
+## Whole-file cross-check against the fixed JAR
+
+`tools/validation/compare_all_samples.sh` dumps every table from both sides and compares them:
+
+```sh
+JACKCESS_CLASSPATH="/path/to/jackcess-5.2.0.jar:/path/to/commons-lang3-3.14.0.jar:/path/to/commons-logging-1.2.jar" \
+    tools/validation/compare_all_samples.sh ./build/rea-jackcess \
+    tests/fixtures/*.mdb tests/fixtures/*.accdb build/fixtures/*.mdb build/fixtures/*.accdb
+```
+
+The C++ side is `rea-jackcess canonical`; the Java side is `JackcessTableDump`, which writes a JSON
+dump of the same shape. `compare_table_dump.py` then compares table names, column names, column
+types, column lengths and rows as multisets, with these deliberate normalisations:
+
+- a calculated column is compared by the type it exposes (`effectiveType`), not the stored type,
+- a complex-value column compares the foreign-key number, which Jackcess prints as text,
+- a `FLOAT` (4-byte) column compares at float32 accuracy, because the text forms differ in the last
+  digits,
+- an unsupported ("unknown") column keeps the row payload as length plus SHA-256, and Jackcess's
+  `RawData[(n) XX ..]` text is decoded back to the same bytes before hashing,
+- `f_<guid>_<column>` flat tables appear only in the C++ dump; the Jackcess dump skips them on
+  purpose, so they are not reported as a difference.
+
+A column whose MDB type has no canonical name prints as `note:` rather than failing; the type name
+then follows Jackcess and becomes `UNSUPPORTED_FIXEDLEN` or `UNSUPPORTED_VARLEN` by length class.
+The canonical JSON keeps `mdbType` (stored type) and adds `calculated`, plus `effectiveType` and
+`effectiveCanonicalType` when a calculated column's ResultType differs.

@@ -1387,6 +1387,9 @@ void test_open_linked_table_chain_and_cycle(const TemporaryDirectory& directory)
                                                                                   : "link-middle-v2003.mdb");
         const auto leaf_path = directory.file(format == DatabaseFormat::v2000 ? "link-leaf-v2000.mdb"
                                                                                 : "link-leaf-v2003.mdb");
+        const auto missing_path = directory.file(format == DatabaseFormat::v2000
+                                                     ? "link-missing-v2000.mdb"
+                                                     : "link-missing-v2003.mdb");
         const auto make_link_database = [&](const std::filesystem::path& path) {
             Database::create(path, format,
                              {TableBuilder("Placeholder").add_column("Id", DataType::int32)});
@@ -1410,6 +1413,7 @@ void test_open_linked_table_chain_and_cycle(const TemporaryDirectory& directory)
             auto root = Database::open(root_path, DatabaseOpenMode::read_write);
             root.create_linked_table("Alias", middle_path.string(), "Nested");
             root.create_linked_table("AliasCopy", middle_path.string(), "Nested");
+            root.create_linked_table("Unavailable", missing_path.string(), "Remote");
         }
 
         std::optional<Table> resolved;
@@ -1443,6 +1447,21 @@ void test_open_linked_table_chain_and_cycle(const TemporaryDirectory& directory)
               "a linked-table chain did not invoke the resolver once per file hop");
         check(resolved && resolved->name() == "Remote",
               "the linked-table chain did not return the final table");
+        {
+            const auto root = Database::open(root_path);
+            bool reported_missing_target = false;
+            try {
+                (void)root.open_linked_table(
+                    "Unavailable", [](const std::filesystem::path&, const LinkedTableInfo& link) {
+                        return std::filesystem::path(*link.target_database);
+                    });
+            } catch (const DatabaseError& error) {
+                reported_missing_target = error.code() == DatabaseErrorCode::io_error &&
+                                          error.path() == missing_path;
+            }
+            check(reported_missing_target,
+                  "an unavailable linked database did not report an I/O error with its target path");
+        }
         const auto row = resolved->rows().next();
         check(row && std::get<std::int32_t>(row->at(0)) == 42 &&
                   std::get<std::string>(row->at(1)) == "resolved",

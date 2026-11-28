@@ -7,7 +7,7 @@
 ## 开工前
 
 1. 阅读[README](README.md)了解项目与当前实现，[源码架构](src/ARCHITECTURE.md)了解模块边界，再读[计划总览](plan/Jackcess-C++重写/README.md)、[能力矩阵](plan/Jackcess-C++重写/03-Jackcess-5.2.0能力矩阵.md)、[实施工作包](plan/Jackcess-C++重写/01-实施工作包.md)和[验收门槛](plan/Jackcess-C++重写/02-验收与发布门槛.md)确认任务范围及验收证据。能力矩阵当前仍是 P0 初版，不能当作冻结的完整规格。
-2. 先检查仓库实际代码、测试和未提交改动。当前 P0 能力矩阵尚未冻结，P1/P2 均未验收。已实现 Jet/ACE 头识别、只读页访问、Jet4 表/列和普通本地表读取，以及固定 ACE V2007/V2010 样本的普通表 schema/行读取（复杂列 ID/关联表、AutoNumber 主键/外键列名、附件/多值/版本历史/unsupported 分类、`Table::raw_complex_values()` 原始行读取和 `Table::complex_values()` 类型化只读读取可用；附件 OLE wrapper 可保留并解出文件载荷，unsupported 字段保留原始编码字节；复杂列写入未实现；固定 V2010 `calcFieldV2010` 样本按 `ResultType` 暴露计算列逻辑类型并读取 Boolean、TEXT、MEMO、LONG、MONEY、FLOAT、NUMERIC 已存结果、不执行公式；V2019 固定样本的 DateExt 与 DateNormalCalc 已投影读取，后者仅解包计算列已存结果、不执行公式（各九行；含 NULL、纳秒精度和 100/1265/1765 年）；V2016 与 V2019 其他 schema/行行为未验收）；Jet4 Usage Map、行目录与溢出行、基础值和 Memo/OLE 原始负载解码、列 `Required` 属性及逻辑/物理索引定义读取。公开 API 支持只读及显式读写 `Database::open`、创建空 V2000/V2003 数据库的 `Database::create`，以及用 `TableBuilder` 在 Jet4 V2000/V2003 初始创建带单列升序/降序非唯一/唯一索引（`IndexBuilder`）的 BOOLEAN、BYTE、SHORT、LONG、SINGLE、DOUBLE、MONEY、GUID、TEXT、BINARY、MEMO、OLE 列空表；MONEY 使用四位小数的十进制值，TEXT/BINARY 列容量默认分别为 255 个 UTF-16 字符和 255 字节，Memo/OLE 使用长值页，BOOLEAN 存在行尾 NULL mask 位且不占定长区字节。表/列名仅支持 ASCII 字母、数字、空格和下划线，创建后返回的 `Database` 句柄仍只读。
+2. 先检查仓库实际代码、测试和未提交改动。当前 P0 能力矩阵尚未冻结，P1/P2 均未验收。已实现 Jet/ACE 头识别、只读页访问、Jet4 表/列和普通本地表读取，以及固定 ACE V2007/V2010 样本的普通表 schema/行读取（复杂列 ID/关联表、AutoNumber 主键/外键列名、附件/多值/版本历史/unsupported 分类、`Table::raw_complex_values()` 原始行读取和 `Table::complex_values()` 类型化只读读取可用；附件 OLE wrapper 可保留并解出文件载荷，unsupported 字段保留原始编码字节；复杂列写入未实现；固定 V2010 `calcFieldV2010` 样本按 `ResultType` 暴露计算列逻辑类型并读取 Boolean、TEXT、MEMO、LONG、MONEY、FLOAT、NUMERIC 已存结果、不执行公式；V2019 固定样本的 DateExt 与 DateNormalCalc 已投影读取，后者仅解包计算列已存结果、不执行公式（各九行；含 NULL、纳秒精度和 100/1265/1765 年）；V2016 与 V2019 其他 schema/行行为未验收）；Jet4 Usage Map、行目录与溢出行、基础值和 Memo/OLE 原始负载解码、列 `Required` 属性及逻辑/物理索引定义读取。只读页 codec 通过 `DatabaseOptions::page_codec` 接入：Access 只编码页 1 及以后，页 0 始终原样返回，codec 每页原地解码；库头编码键非零或容器为 MSISAM 而没有 codec 时以 `unsupported_operation` 拒绝打开。公开 API 支持只读及显式读写 `Database::open`、创建空 V2000/V2003 数据库的 `Database::create`，以及用 `TableBuilder` 在 Jet4 V2000/V2003 初始创建带单列升序/降序非唯一/唯一索引（`IndexBuilder`）的 BOOLEAN、BYTE、SHORT、LONG、SINGLE、DOUBLE、MONEY、GUID、TEXT、BINARY、MEMO、OLE 列空表；MONEY 使用四位小数的十进制值，TEXT/BINARY 列容量默认分别为 255 个 UTF-16 字符和 255 字节，Memo/OLE 使用长值页，BOOLEAN 存在行尾 NULL mask 位且不占定长区字节。表/列名仅支持 ASCII 字母、数字、空格和下划线，创建后返回的 `Database` 句柄仍只读。
 3. Jackcess 行为以[计划总览](plan/Jackcess-C++重写/README.md)固定的 5.2.0 源码提交、JAR 哈希及对应测试为准。按计划中的 `MDB_REFERENCE_DIR` 查找逆向笔记、比较器和外部语料；这些历史材料提供参考，不能替代本仓库当前回归或产品验收。
 
 ## 实现约定
@@ -19,6 +19,10 @@
 - 不提交新造的二进制数据库样本（`.mdb`、`.accdb` 等）。语料由 `tools/validation/` 的生成器写到构建目录（CMake 变量 `REA_JACKCESS_FIXTURE_DIR`，默认 `build/fixtures`）；文件缺失时对应用例返回 77，由 CTest 记为跳过。既有上游与基线语料保持不动。
 - 唯一例外是已入库的真实样本 `test_data_only_read/test_mdb.mdb`：`tests/real_sample_test.cpp` 固定其 SHA-256，不得替换或再新增同类样本。仓库已公开，该样本随之可见；对外发布前按 `test_data_only_read/README.md` 的说明评估脱敏或替换。
 - 上游版本升级按工作包的同步流程执行；不要在未完成差异评审和回归前更换 5.2.0 基线。
+
+## 注释约定
+
+公开 API 与内部头文件（`include/rea_jackcess/**/*.hpp`、`src/**/*.hpp`）使用英文 Doxygen 风格注释：`///` 块写在声明上方，逐项给出作用、每个参数含义、返回值与抛出（`DatabaseErrorCode` 或标准异常）；结构体/枚举的每个成员用 `//` 说明含义、单位和编码（如 "UTF-16 code units"、"page number"、"UTF-8 text"）。注释必须与实现一致——写前对照对应 `.cpp`，不臆测字段语义。
 
 ## 构建与验证
 

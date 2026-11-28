@@ -171,6 +171,10 @@ std::string_view mdb_type_name(std::uint8_t mdb_type) {
             return "BIG_INT";
         case 0x14:
             return "EXT_DATE_TIME";
+        case 0xfe:
+            return "UNSUPPORTED_FIXEDLEN";
+        case 0xff:
+            return "UNSUPPORTED_VARLEN";
         default:
             return "UNKNOWN";
     }
@@ -247,9 +251,13 @@ void write_canonical_value(std::ostream& output, const Jet4Value& value) {
             write_json_string(output, sha256_hex(item.bytes));
             output << "}}";
         } else if constexpr (std::is_same_v<T, UnsupportedValue>) {
-            output << "{\"$unsupported\":";
+            // The library keeps the encoded column bytes; identify them with a hash so the value can
+            // be compared with the fixed JAR without embedding binary payloads in the dump.
+            output << "{\"$unsupported\":{\"description\":";
             write_json_string(output, item.description);
-            output << '}';
+            output << ",\"size\":" << item.raw_bytes.size() << ",\"sha256\":";
+            write_json_string(output, sha256_hex(item.raw_bytes));
+            output << "}}";
         }
     }, value);
 }
@@ -313,13 +321,34 @@ void write_schema_table(std::ostream& output,
         output << "{\"ordinal\":" << index + 1 << ",\"name\":";
         write_json_string(output, column.name);
         output << ",\"mdbType\":";
-        write_json_string(output, mdb_type_name(column.type));
+        std::string_view mdb_type = mdb_type_name(column.type);
+        if (mdb_type == "UNKNOWN") {
+            // Jackcess replaces an unmapped type code with a placeholder chosen by length class.
+            mdb_type = ((column.flags & 0x01) != 0) ? "UNSUPPORTED_FIXEDLEN" : "UNSUPPORTED_VARLEN";
+        }
+        write_json_string(output, mdb_type);
         output << ",\"canonicalType\":";
         const auto normalized_type = canonical_type(column.type);
         if (normalized_type) {
             write_json_string(output, *normalized_type);
         } else {
             write_json_string(output, "unknown");
+        }
+        // A calculated column stores one type and reports the calculated ResultType to callers, so
+        // the exposed type differs from the definition. effectiveType mirrors ColumnInfo::type and
+        // effectiveCanonicalType mirrors the public canonical type; both stay absent otherwise.
+        const std::uint8_t effective_type = column.calculated_result_type.value_or(column.type);
+        output << ",\"calculated\":" << (column.calculated ? "true" : "false");
+        if (effective_type != column.type) {
+            output << ",\"effectiveType\":";
+            write_json_string(output, mdb_type_name(effective_type));
+            output << ",\"effectiveCanonicalType\":";
+            const auto effective_normalized = canonical_type(effective_type);
+            if (effective_normalized) {
+                write_json_string(output, *effective_normalized);
+            } else {
+                write_json_string(output, "unknown");
+            }
         }
         output << ",\"size\":" << column.length
                << ",\"precision\":" << precision

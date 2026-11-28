@@ -69,13 +69,6 @@ std::filesystem::path copy_fixture(const std::filesystem::path& source,
     return target;
 }
 
-bool is_corruption_code(DatabaseErrorCode code) {
-    return code == DatabaseErrorCode::truncated_file ||
-           code == DatabaseErrorCode::corrupted_file ||
-           code == DatabaseErrorCode::page_out_of_range ||
-           code == DatabaseErrorCode::io_error;
-}
-
 std::uint32_t page_size_of(const std::filesystem::path& path) {
     const auto file = rea_jackcess::DatabaseFile::open(path);
     return file.format().page_size;
@@ -84,13 +77,24 @@ std::uint32_t page_size_of(const std::filesystem::path& path) {
 // A damaged file must fail through DatabaseError, never through a std::bad_alloc, a hang, or a
 // silently short result. The lambda is the operation under test.
 template <typename Operation>
-void expect_corruption_error(const std::string& label, Operation operation) {
+void expect_corruption_error(const std::string& label,
+                             const std::filesystem::path& expected_path,
+                             DatabaseErrorCode expected_code,
+                             std::uint64_t expected_page,
+                             std::optional<std::string> expected_table,
+                             Operation operation) {
     try {
         operation();
     } catch (const DatabaseError& error) {
-        check(is_corruption_code(error.code()),
+        check(error.code() == expected_code,
               label + ": unexpected error code " + std::to_string(static_cast<int>(error.code())) +
                   " (" + error.what() + ")");
+        check(error.path() == expected_path, label + ": the error lost its file path");
+        check(error.page_number() == expected_page, label + ": the error lost or changed its page context");
+        if (expected_table) {
+            check(error.context().table_name == expected_table,
+                  label + ": the error lost its table context");
+        }
         check(std::string(error.what()).size() > 0, label + ": empty error message");
         std::cout << "  " << label << ": code " << static_cast<int>(error.code());
         if (error.page_number()) {
@@ -119,7 +123,12 @@ std::vector<Row> read_all_rows(Database& database) {
 }
 
 // Returns a data page that currently holds at least one live user row.
-std::uint64_t used_row_page(const std::filesystem::path& path) {
+struct RowPageTarget {
+    std::string table_name;
+    std::uint64_t page_number;
+};
+
+RowPageTarget used_row_page(const std::filesystem::path& path) {
     auto database = Database::open(path);
     for (const auto& table : database.tables()) {
         if (!table.is_user_table()) {
@@ -127,7 +136,7 @@ std::uint64_t used_row_page(const std::filesystem::path& path) {
         }
         auto cursor = table.rows();
         if (auto row = cursor.next()) {
-            return row->id().page_number;
+            return {table.name(), row->id().page_number};
         }
     }
     throw std::runtime_error("the fixture has no user rows to locate a data page");
@@ -180,7 +189,12 @@ int main(int argc, char** argv) {
             std::vector<std::uint8_t> bytes = original;
             bytes.resize(page_size * 2);
             write_file(path, bytes);
-            expect_corruption_error("truncated file", [&] {
+            expect_corruption_error("truncated file",
+                                    path,
+                                    DatabaseErrorCode::page_out_of_range,
+                                    2,
+                                    std::nullopt,
+                                    [&] {
                 auto database = Database::open(path);
                 read_all_rows(database);
             });
@@ -199,7 +213,12 @@ int main(int argc, char** argv) {
             std::fill(bytes.begin() + begin,
                       bytes.begin() + begin + static_cast<std::ptrdiff_t>(page_size), 0xff);
             write_file(path, bytes);
-            expect_corruption_error("wiped index root", [&] {
+            expect_corruption_error("wiped index root",
+                                    path,
+                                    DatabaseErrorCode::corrupted_file,
+                                    target.root_page,
+                                    target.table_name,
+                                    [&] {
                 auto database = Database::open(path);
                 for (const auto& table : database.tables()) {
                     if (table.name() != target.table_name) {
@@ -216,15 +235,21 @@ int main(int argc, char** argv) {
         // 3. A page that holds live rows is replaced with filler: the scan must stop with an error
         //    instead of returning short or wrong data.
         {
-            const auto source_page = used_row_page(fixture);
-            check(source_page > 1 && source_page < page_count, "unexpected row page number");
+            const auto target = used_row_page(fixture);
+            check(target.page_number > 1 && target.page_number < page_count,
+                  "unexpected row page number");
             const auto path = copy_fixture(fixture, temporary.path(), "data-page.accdb");
             std::vector<std::uint8_t> bytes = original;
-            const auto begin = static_cast<std::ptrdiff_t>(source_page * page_size);
+            const auto begin = static_cast<std::ptrdiff_t>(target.page_number * page_size);
             std::fill(bytes.begin() + begin, bytes.begin() + begin + static_cast<std::ptrdiff_t>(page_size),
                       0xff);
             write_file(path, bytes);
-            expect_corruption_error("wiped row page", [&] {
+            expect_corruption_error("wiped row page",
+                                    path,
+                                    DatabaseErrorCode::corrupted_file,
+                                    target.page_number,
+                                    target.table_name,
+                                    [&] {
                 auto database = Database::open(path);
                 read_all_rows(database);
             });

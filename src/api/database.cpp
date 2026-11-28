@@ -1941,6 +1941,7 @@ Database Database::open(const std::filesystem::path& path, DatabaseOpenMode mode
         detail::WriteJournal::recover(path);
     }
     auto file = detail::PageFile::open(path);
+    file.require_decodable();
     const auto engine_version = file.format().version;
     if (mode == DatabaseOpenMode::read_write &&
         (engine_version == EngineVersion::ace2007 || engine_version == EngineVersion::ace2010 ||
@@ -1960,7 +1961,8 @@ namespace {
 
 void validate_options(const DatabaseOptions& options, const std::filesystem::path& path) {
     if (options.code_page && *options.code_page != 1252 && *options.code_page != 819 &&
-        *options.code_page != 28591) {
+        *options.code_page != 28591 && *options.code_page != 936 && *options.code_page != 1251 &&
+        *options.code_page != 932) {
         throw DatabaseError(DatabaseErrorCode::unsupported_operation,
                             "Unsupported code page override: " + std::to_string(*options.code_page),
                             path);
@@ -1971,7 +1973,8 @@ void validate_options(const DatabaseOptions& options, const std::filesystem::pat
 
 Database Database::open(const std::filesystem::path& path, DatabaseOptions options) {
     validate_options(options, path);
-    auto file = detail::PageFile::open(path, options.code_page);
+    auto file = detail::PageFile::open(path, {options.code_page, options.page_codec});
+    file.require_decodable();
     auto schema = detail::read_table_schema_catalog(file);
     return Database(std::make_shared<detail::DatabaseState>(std::move(file),
                                                             std::move(schema),
@@ -1981,7 +1984,8 @@ Database Database::open(const std::filesystem::path& path, DatabaseOptions optio
 
 Database Database::open(const std::vector<std::uint8_t>& bytes, DatabaseOptions options) {
     validate_options(options, std::filesystem::path("<memory>"));
-    auto file = detail::PageFile::open(bytes, "<memory>", options.code_page);
+    auto file = detail::PageFile::open(bytes, "<memory>", {options.code_page, options.page_codec});
+    file.require_decodable();
     auto schema = detail::read_table_schema_catalog(file);
     return Database(std::make_shared<detail::DatabaseState>(std::move(file),
                                                             std::move(schema),
@@ -1991,6 +1995,7 @@ Database Database::open(const std::vector<std::uint8_t>& bytes, DatabaseOptions 
 
 Database Database::open(const std::vector<std::uint8_t>& bytes) {
     auto file = detail::PageFile::open(bytes);
+    file.require_decodable();
     auto schema = detail::read_table_schema_catalog(file);
     return Database(std::make_shared<detail::DatabaseState>(std::move(file),
                                                             std::move(schema),
